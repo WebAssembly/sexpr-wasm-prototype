@@ -52,13 +52,8 @@ def F32ToC(f32_bits):
       return '%smake_nan_f32(0x%06x)' % (sign, f32_bits & F32_SIG_MASK)
     else:
       return '%sINFINITY' % sign
-  elif f32_bits == F32_SIGN_BIT:
-    return '-0.f'
   else:
-    s = '%.9g' % ReinterpretF32(f32_bits)
-    if '.' not in s:
-      s += '.'
-    return s + 'f'
+    return '%1.9ef' % ReinterpretF32(f32_bits)
 
 
 def ReinterpretF64(f64_bits):
@@ -77,10 +72,8 @@ def F64ToC(f64_bits):
       return '%smake_nan_f64(0x%06x)' % (sign, f64_bits & F64_SIG_MASK)
     else:
       return '%sINFINITY' % sign
-  elif f64_bits == F64_SIGN_BIT:
-    return '-0.0'
   else:
-    return '%.17g' % ReinterpretF64(f64_bits)
+    return '%1.17e' % ReinterpretF64(f64_bits)
 
 
 def MangleType(t):
@@ -305,16 +298,55 @@ class CWriter(object):
       raise Error('Unexpected action type: %s' % type_)
 
 
-def Compile(cc, c_filename, out_dir, *args):
-  out_dir = os.path.abspath(out_dir)
-  o_filename = utils.ChangeDir(utils.ChangeExt(c_filename, '.o'), out_dir)
-  cc.RunWithArgs('-c', '-o', o_filename, c_filename, *args, cwd=out_dir)
-  return o_filename
+class Toolchain(object):
+  def __init__(self, out_dir, options):
+    self.out_dir = out_dir
+    self.msvc = options.msvc
+    self.cc = utils.Executable(options.cc, *options.cflags,
+                               clean_stdout=self._clean_cc_stdout)
+    self.link = utils.Executable(options.cc)
 
+    if self.msvc:
+      self.cc.AppendArg('/nologo')
+      self.link.AppendArg('/nologo')
 
-def Link(cc, o_filenames, main_exe, out_dir, *args):
-  args = ['-o', main_exe] + o_filenames + list(args)
-  cc.RunWithArgs(*args, cwd=out_dir)
+  def _clean_cc_stdout(self, stdout):
+    if self.msvc:
+      # Strip the first line of output, since cl.exe always prints the name of
+      # the file it is compiling.
+      nl = stdout.find(b'\n')
+      stdout = stdout[nl+1:]
+    return stdout
+
+  def Compile(self, c_filename, includes=None, defines=None):
+    includes = includes or []
+    defines = defines or []
+
+    out_dir = os.path.abspath(self.out_dir)
+    o_filename = utils.ChangeDir(utils.ChangeExt(c_filename, ''), out_dir)
+
+    if self.msvc:
+      o_filename += '.obj'
+      args = (['/c', '/Fo' + o_filename, c_filename] +
+              ['/I' + i for i in includes] +
+              ['/D' + d for d in defines])
+      self.cc.RunWithArgs(*args, cwd=out_dir)
+    else:
+      o_filename += '.o'
+      args = (['-c', '-o', o_filename, c_filename] + 
+              ['-I' + i for i in includes] +
+              ['-D' + d for d in defines])
+      self.cc.RunWithArgs(*args, cwd=out_dir)
+
+    return o_filename
+
+  def Link(self, o_filenames, main_exe):
+    if self.msvc:
+      args = ['/Fe%s.exe' % main_exe] + o_filenames
+    else:
+      # Always include libm.
+      args = ['-o', main_exe] + o_filenames + ['-lm']
+    self.link.RunWithArgs(*args, cwd=self.out_dir)
 
 
 def main(args):
@@ -329,7 +361,9 @@ def main(args):
   parser.add_argument('--wasmrt-dir', metavar='PATH',
                       help='directory with wasm-rt files', default=WASM2C_DIR)
   parser.add_argument('--cc', metavar='PATH',
-                      help='the path to the C compiler', default='cc')
+                      help='the path to the C compiler')
+  parser.add_argument('--msvc', action='store_true',
+                      help='If set, use MSVC as compiler')
   parser.add_argument('--cflags', metavar='FLAGS',
                       help='additional flags for C compiler.',
                       action='append', default=[])
@@ -352,6 +386,9 @@ def main(args):
   parser.add_argument('file', help='wast file.')
   options = parser.parse_args(args)
 
+  if options.cc is None:
+    options.cc = 'cl' if options.msvc else 'cc'
+
   with utils.TempDirectory(options.out_dir, 'run-spec-wasm2c-') as out_dir:
     # Parse JSON file and generate main .c file with calls to test functions.
     wast2json = utils.Executable(
@@ -366,8 +403,6 @@ def main(args):
     wasm2c = utils.Executable(
         find_exe.GetWasm2CExecutable(options.bindir),
         error_cmdline=options.error_cmdline)
-
-    cc = utils.Executable(options.cc, *options.cflags)
 
     with open(json_file_path) as json_file:
       spec_json = json.load(json_file)
@@ -385,25 +420,27 @@ def main(args):
     with open(main_filename, 'w') as out_main_file:
       out_main_file.write(output.getvalue())
 
-    o_filenames = []
-    includes = '-I%s' % options.wasmrt_dir
+    toolchain = Toolchain(out_dir, options)
 
-    # Compile wasm-rt-impl.
-    wasm_rt_impl_c = os.path.join(options.wasmrt_dir, 'wasm-rt-impl.c')
-    o_filenames.append(Compile(cc, wasm_rt_impl_c, out_dir, includes))
+    o_filenames = []
+    includes = ['%s' % options.wasmrt_dir]
+
+    if options.compile:
+      wasm_rt_impl_c = os.path.join(options.wasmrt_dir, 'wasm-rt-impl.c')
+      o_filenames.append(toolchain.Compile(wasm_rt_impl_c, includes))
 
     for i, wasm_filename in enumerate(cwriter.GetModuleFilenames()):
       c_filename = utils.ChangeExt(wasm_filename, '.c')
       wasm2c.RunWithArgs(wasm_filename, '-o', c_filename, cwd=out_dir)
       if options.compile:
-        defines = '-DWASM_RT_MODULE_PREFIX=%s' % cwriter.GetModulePrefix(i)
-        o_filenames.append(Compile(cc, c_filename, out_dir, includes, defines))
+        defines = ['WASM_RT_MODULE_PREFIX=%s' % cwriter.GetModulePrefix(i)]
+        o_filenames.append(toolchain.Compile(c_filename, includes, defines))
 
     if options.compile:
       main_c = os.path.basename(main_filename)
-      o_filenames.append(Compile(cc, main_c, out_dir, includes, defines))
+      o_filenames.append(toolchain.Compile(main_c, includes))
       main_exe = os.path.basename(utils.ChangeExt(json_file_path, ''))
-      Link(cc, o_filenames, main_exe, out_dir, '-lm')
+      toolchain.Link(o_filenames, main_exe)
 
     if options.compile and options.run:
       utils.Executable(os.path.join(out_dir, main_exe),
@@ -416,9 +453,12 @@ if __name__ == '__main__':
   try:
     sys.exit(main(sys.argv[1:]))
   except Error as e:
-    # TODO(binji): gcc will output unicode quotes in errors since the terminal
-    # environment allows it, but python2 stderr will always attempt to convert
-    # to ascii first, which fails. This will replace the invalid characters
-    # instead, which is ugly, but works.
-    sys.stderr.write(u'{0}\n'.format(e).encode('ascii', 'replace'))
+    if sys.version_info[0] == 3:
+      sys.stderr.write(u'{0}\n'.format(e))
+    else:
+      # TODO(binji): gcc will output unicode quotes in errors since the
+      # terminal environment allows it, but python2 stderr will always attempt
+      # to convert to ascii first, which fails. This will replace the invalid
+      # characters instead, which is ugly, but works.
+      sys.stderr.write(u'{0}\n'.format(e).encode('ascii', 'replace'))
     sys.exit(1)

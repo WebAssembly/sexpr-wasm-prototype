@@ -170,6 +170,7 @@ class CWriter {
   static std::string MangleGlobalName(string_view, Type);
   static std::string LegalizeName(string_view);
   static std::string ExportName(string_view mangled_name);
+  static std::string ExportFuncName(string_view mangled_name);
   std::string DefineName(SymbolSet*, string_view);
   std::string DefineImportName(const std::string& name,
                                string_view module_name,
@@ -177,6 +178,8 @@ class CWriter {
   std::string DefineGlobalScopeName(const std::string&);
   std::string DefineLocalScopeName(const std::string&);
   std::string DefineStackVarName(Index, Type, string_view);
+
+  size_t GetStackFrameSize(const Func&);
 
   void Indent(int size = INDENT_SIZE);
   void Dedent(int size = INDENT_SIZE);
@@ -344,36 +347,38 @@ static const char* s_global_symbols[] = {
     "strlen", "strncat", "strncmp", "strncpy", "strpbrk", "strrchr", "strspn",
     "strstr", "strtok", "strxfrm",
 
+    // MSVC macros
+    "min", "max",
+
     // defined
     "CALL_INDIRECT", "DEFINE_LOAD", "DEFINE_REINTERPRET", "DEFINE_STORE",
-    "DIVREM_U", "DIV_S", "DIV_U", "f32", "f32_load", "f32_reinterpret_i32",
-    "f32_store", "f64", "f64_load", "f64_reinterpret_i64", "f64_store", "FMAX",
-    "FMIN", "FUNC_EPILOGUE", "FUNC_PROLOGUE", "func_types", "I32_CLZ",
-    "I32_CLZ", "I32_DIV_S", "i32_load", "i32_load16_s", "i32_load16_u",
-    "i32_load8_s", "i32_load8_u", "I32_POPCNT", "i32_reinterpret_f32",
-    "I32_REM_S", "I32_ROTL", "I32_ROTR", "i32_store", "i32_store16",
-    "i32_store8", "I32_TRUNC_S_F32", "I32_TRUNC_S_F64", "I32_TRUNC_U_F32",
-    "I32_TRUNC_U_F64", "I64_CTZ", "I64_CTZ", "I64_DIV_S", "i64_load",
-    "i64_load16_s", "i64_load16_u", "i64_load32_s", "i64_load32_u",
-    "i64_load8_s", "i64_load8_u", "I64_POPCNT", "i64_reinterpret_f64",
-    "I64_REM_S", "I64_ROTL", "I64_ROTR", "i64_store", "i64_store16",
-    "i64_store32", "i64_store8", "I64_TRUNC_S_F32", "I64_TRUNC_S_F64",
-    "I64_TRUNC_U_F32", "I64_TRUNC_U_F64", "init", "init_elem_segment",
-    "init_func_types", "init_globals", "init_memory", "init_table", "LIKELY",
-    "MEMCHECK", "REM_S", "REM_U", "ROTL", "ROTR", "s16", "s32", "s64", "s8",
-    "TRAP", "TRUNC_S", "TRUNC_U", "Type", "u16", "u32", "u64", "u8", "UNLIKELY",
-    "UNREACHABLE", "WASM_RT_ADD_PREFIX", "wasm_rt_allocate_memory",
-    "wasm_rt_allocate_table", "wasm_rt_anyfunc_t", "wasm_rt_call_stack_depth",
-    "wasm_rt_elem_t", "WASM_RT_F32", "WASM_RT_F64", "wasm_rt_grow_memory",
-    "WASM_RT_I32", "WASM_RT_I64", "WASM_RT_INCLUDED_",
-    "WASM_RT_MAX_CALL_STACK_DEPTH", "wasm_rt_memory_t", "WASM_RT_MODULE_PREFIX",
-    "WASM_RT_PASTE_", "WASM_RT_PASTE", "wasm_rt_register_func_type",
-    "wasm_rt_table_t", "wasm_rt_trap", "WASM_RT_TRAP_CALL_INDIRECT",
-    "WASM_RT_TRAP_DIV_BY_ZERO", "WASM_RT_TRAP_EXHAUSTION",
-    "WASM_RT_TRAP_INT_OVERFLOW", "WASM_RT_TRAP_INVALID_CONVERSION",
-    "WASM_RT_TRAP_NONE", "WASM_RT_TRAP_OOB", "wasm_rt_trap_t",
-    "WASM_RT_TRAP_UNREACHABLE",
-
+    "DIVREM_U", "DIV_S", "DIV_U", "f32", "F32_ABS", "F64_ABS", "F32_COPYSIGN",
+    "F64_COPYSIGN", "f32_load", "f32_reinterpret_i32", "f32_store", "f64",
+    "f64_load", "f64_reinterpret_i64", "f64_store", "FMAX", "FMIN",
+    "FUNC_EPILOGUE", "FUNC_PROLOGUE", "func_types", "I32_CLZ", "I32_CLZ",
+    "I32_DIV_S", "i32_load", "i32_load16_s", "i32_load16_u", "i32_load8_s",
+    "i32_load8_u", "I32_POPCNT", "i32_reinterpret_f32", "I32_REM_S", "I32_ROTL",
+    "I32_ROTR", "i32_store", "i32_store16", "i32_store8", "I32_TRUNC_S_F32",
+    "I32_TRUNC_S_F64", "I32_TRUNC_U_F32", "I32_TRUNC_U_F64", "I64_CTZ",
+    "I64_CTZ", "I64_DIV_S", "i64_load", "i64_load16_s", "i64_load16_u",
+    "i64_load32_s", "i64_load32_u", "i64_load8_s", "i64_load8_u", "I64_POPCNT",
+    "i64_reinterpret_f64", "I64_REM_S", "I64_ROTL", "I64_ROTR", "i64_store",
+    "i64_store16", "i64_store32", "i64_store8", "I64_TRUNC_S_F32",
+    "I64_TRUNC_S_F64", "I64_TRUNC_U_F32", "I64_TRUNC_U_F64", "init",
+    "init_elem_segment", "init_func_types", "init_globals", "init_memory",
+    "init_table", "LIKELY", "MEMCHECK", "REM_S", "REM_U", "ROTL", "ROTR", "s16",
+    "s32", "s64", "s8", "TRAP", "TRUNC_S", "TRUNC_U", "Type", "u16", "u32",
+    "u64", "u8", "UNLIKELY", "UNREACHABLE", "WASM_RT_ADD_PREFIX",
+    "wasm_rt_allocate_memory", "wasm_rt_allocate_table", "wasm_rt_anyfunc_t",
+    "wasm_rt_call_stack_depth", "WASM_RT_CC", "wasm_rt_elem_t", "WASM_RT_F32",
+    "WASM_RT_F64", "wasm_rt_grow_memory", "WASM_RT_I32", "WASM_RT_I64",
+    "WASM_RT_INCLUDED_", "WASM_RT_MAX_CALL_STACK_DEPTH", "wasm_rt_memory_t",
+    "WASM_RT_MODULE_PREFIX", "WASM_RT_PASTE_", "WASM_RT_PASTE",
+    "wasm_rt_register_func_type", "wasm_rt_table_t", "wasm_rt_trap",
+    "WASM_RT_TRAP_CALL_INDIRECT", "WASM_RT_TRAP_DIV_BY_ZERO",
+    "WASM_RT_TRAP_EXHAUSTION", "WASM_RT_TRAP_INT_OVERFLOW",
+    "WASM_RT_TRAP_INVALID_CONVERSION", "WASM_RT_TRAP_NONE", "WASM_RT_TRAP_OOB",
+    "wasm_rt_trap_t", "WASM_RT_TRAP_UNREACHABLE",
 };
 
 #define SECTION_NAME(x) s_header_##x
@@ -490,14 +495,23 @@ std::string CWriter::MangleTypes(const TypeVector& types) {
   return result;
 }
 
+// Use unsigned char instead of char to avoid undefined behavior.
+bool IsAlpha(unsigned char c) {
+  return isalpha(c);
+}
+
+bool IsAlnum(unsigned char c) {
+  return isalnum(c);
+}
+
 // static
 std::string CWriter::MangleName(string_view name) {
   const char kPrefix = 'Z';
   std::string result = "Z_";
 
   if (!name.empty()) {
-    for (char c : name) {
-      if ((isalnum(c) && c != kPrefix) || c == '_') {
+    for (unsigned char c : name) {
+      if ((IsAlnum(c) && c != kPrefix) || c == '_') {
         result += c;
       } else {
         result += kPrefix;
@@ -534,9 +548,9 @@ std::string CWriter::LegalizeName(string_view name) {
     return "_";
 
   std::string result;
-  result = isalpha(name[0]) ? name[0] : '_';
+  result = IsAlpha(name[0]) ? name[0] : '_';
   for (size_t i = 1; i < name.size(); ++i)
-    result += isalnum(name[i]) ? name[i] : '_';
+    result += IsAlnum(name[i]) ? name[i] : '_';
 
   return result;
 }
@@ -568,7 +582,7 @@ std::string CWriter::DefineImportName(const std::string& name,
   import_syms_.insert(name);
   global_syms_.insert(mangled);
   global_sym_map_.insert(SymbolMap::value_type(name, mangled));
-  return "(*" + mangled + ")";
+  return mangled;
 }
 
 std::string CWriter::DefineGlobalScopeName(const std::string& name) {
@@ -590,6 +604,28 @@ std::string CWriter::DefineStackVarName(Index index,
   StackTypePair stp = {index, type};
   stack_var_sym_map_.insert(StackVarSymbolMap::value_type(stp, unique));
   return unique;
+}
+
+size_t TypeSizeInBytes(Type type) {
+  switch (type) {
+    case Type::I32: return 4;
+    case Type::I64: return 8;
+    case Type::F32: return 4;
+    case Type::F64: return 8;
+    case Type::V128: return 16;
+    default: return 0;
+  }
+}
+
+size_t CWriter::GetStackFrameSize(const Func& func) {
+  size_t total = 0;
+  for (Type param_type : func.decl.sig.param_types) {
+    total += TypeSizeInBytes(param_type);
+  }
+  for (Type local_type : func.local_types) {
+    total += TypeSizeInBytes(local_type);
+  }
+  return total;
 }
 
 void CWriter::Indent(int size) {
@@ -802,11 +838,8 @@ void CWriter::Write(const Const& const_) {
           Writef("f32_reinterpret_i32(0x%08x) /* %snan:0x%06x */",
                  const_.f32_bits, sign, significand);
         }
-      } else if (const_.f32_bits == 0x80000000) {
-        // Negative zero. Special-cased so it isn't written as -0 below.
-        Writef("-0.f");
       } else {
-        Writef("%.9g", Bitcast<float>(const_.f32_bits));
+        Writef("%1.9ef", Bitcast<float>(const_.f32_bits));
       }
       break;
     }
@@ -825,11 +858,8 @@ void CWriter::Write(const Const& const_) {
                  " */",
                  const_.f64_bits, sign, significand);
         }
-      } else if (const_.f64_bits == 0x8000000000000000ull) {
-        // Negative zero. Special-cased so it isn't written as -0 below.
-        Writef("-0.0");
       } else {
-        Writef("%.17g", Bitcast<double>(const_.f64_bits));
+        Writef("%1.17e", Bitcast<double>(const_.f64_bits));
       }
       break;
 
@@ -867,7 +897,7 @@ void CWriter::InitGlobalSymbols() {
 std::string CWriter::GenerateHeaderGuard() const {
   std::string result;
   for (char c : header_name_) {
-    if (isalnum(c) || c == '_') {
+    if (IsAlnum(c) || c == '_') {
       result += toupper(c);
     } else {
       result += '_';
@@ -885,8 +915,10 @@ void CWriter::WriteSourceTop() {
 
 void CWriter::WriteFuncTypes() {
   Write(Newline());
-  Writef("static u32 func_types[%" PRIzd "];", module_->func_types.size());
-  Write(Newline(), Newline());
+  if (!module_->func_types.empty()) {
+    Writef("static u32 func_types[%" PRIzd "];", module_->func_types.size());
+    Write(Newline(), Newline());
+  }
   Write("static void init_func_types(void) {", Newline());
   Index func_type_index = 0;
   for (FuncType* func_type : module_->func_types) {
@@ -922,37 +954,38 @@ void CWriter::WriteImports() {
     switch (import->kind()) {
       case ExternalKind::Func: {
         const Func& func = cast<FuncImport>(import)->func;
-        WriteFuncDeclaration(
-            func.decl,
-            DefineImportName(
-                func.name, import->module_name,
-                MangleFuncName(import->field_name, func.decl.sig.param_types,
-                               func.decl.sig.result_types)));
+        std::string mangled_name = DefineImportName(
+            func.name, import->module_name,
+            MangleFuncName(import->field_name, func.decl.sig.param_types,
+                           func.decl.sig.result_types));
+        WriteFuncDeclaration(func.decl, "(WASM_RT_CC * " + mangled_name + ")");
         Write(";");
         break;
       }
 
       case ExternalKind::Global: {
         const Global& global = cast<GlobalImport>(import)->global;
-        WriteGlobal(global,
-                    DefineImportName(
-                        global.name, import->module_name,
-                        MangleGlobalName(import->field_name, global.type)));
+        std::string mangled_name =
+            DefineImportName(global.name, import->module_name,
+                             MangleGlobalName(import->field_name, global.type));
+        WriteGlobal(global, Deref(mangled_name));
         Write(";");
         break;
       }
 
       case ExternalKind::Memory: {
         const Memory& memory = cast<MemoryImport>(import)->memory;
-        WriteMemory(DefineImportName(memory.name, import->module_name,
-                                     MangleName(import->field_name)));
+        std::string mangled_name = DefineImportName(
+            memory.name, import->module_name, MangleName(import->field_name));
+        WriteMemory(Deref(mangled_name));
         break;
       }
 
       case ExternalKind::Table: {
         const Table& table = cast<TableImport>(import)->table;
-        WriteTable(DefineImportName(table.name, import->module_name,
-                                    MangleName(import->field_name)));
+        std::string mangled_name = DefineImportName(
+            table.name, import->module_name, MangleName(import->field_name));
+        WriteTable(Deref(mangled_name));
         break;
       }
 
@@ -975,7 +1008,8 @@ void CWriter::WriteFuncDeclarations() {
     bool is_import = func_index < module_->num_func_imports;
     if (!is_import) {
       Write("static ");
-      WriteFuncDeclaration(func->decl, DefineGlobalScopeName(func->name));
+      WriteFuncDeclaration(func->decl,
+                           "WASM_RT_CC " + DefineGlobalScopeName(func->name));
       Write(";", Newline());
     }
     ++func_index;
@@ -1087,6 +1121,10 @@ void CWriter::WriteDataInitializers() {
       Write(Newline());
     } else {
       for (const DataSegment* data_segment : module_->data_segments) {
+        if (data_segment->data.empty()) {
+          continue;
+        }
+
         Write(Newline(), "static const u8 data_segment_data_",
               data_segment_index, "[] = ", OpenBrace());
         size_t i = 0;
@@ -1114,6 +1152,10 @@ void CWriter::WriteDataInitializers() {
   }
   data_segment_index = 0;
   for (const DataSegment* data_segment : module_->data_segments) {
+    if (data_segment->data.empty()) {
+      continue;
+    }
+
     Write("memcpy(&(", ExternalRef(memory->name), ".data[");
     WriteInitExpr(data_segment->offset);
     Write("]), data_segment_data_", data_segment_index, ", ",
@@ -1191,7 +1233,8 @@ void CWriter::WriteExports(WriteExportsKind kind) {
                                       func->decl.sig.result_types));
         internal_name = func->name;
         if (kind != WriteExportsKind::Initializers) {
-          WriteFuncDeclaration(func->decl, Deref(mangled_name));
+          WriteFuncDeclaration(func->decl,
+                               "(WASM_RT_CC * " + mangled_name + ")");
           Write(";");
         }
         break;
@@ -1271,10 +1314,12 @@ void CWriter::Write(const Func& func) {
   local_sym_map_.clear();
   stack_var_sym_map_.clear();
 
-  Write("static ", ResultType(func.decl.sig.result_types), " ",
+  size_t stack_frame_size = GetStackFrameSize(func);
+
+  Write("static ", ResultType(func.decl.sig.result_types), " WASM_RT_CC ",
         GlobalName(func.name), "(");
   WriteParamsAndLocals();
-  Write("FUNC_PROLOGUE;", Newline());
+  Write("FUNC_PROLOGUE(", stack_frame_size, ");", Newline());
 
   stream_ = &func_stream_;
   stream_->ClearOffset();
@@ -1287,7 +1332,7 @@ void CWriter::Write(const Func& func) {
   PopLabel();
   ResetTypeStack(0);
   PushTypes(func.decl.sig.result_types);
-  Write("FUNC_EPILOGUE;", Newline());
+  Write("FUNC_EPILOGUE(", stack_frame_size, ");", Newline());
 
   if (!func.decl.sig.result_types.empty()) {
     // Return the top of the stack implicitly.
@@ -1477,7 +1522,7 @@ void CWriter::Write(const ExprList& exprs) {
         Index func_type_index = module_->GetFuncTypeIndex(decl.type_var);
 
         Write("CALL_INDIRECT(", ExternalRef(table->name), ", ");
-        WriteFuncDeclaration(decl, "(*)");
+        WriteFuncDeclaration(decl, "(WASM_RT_CC *)");
         Write(", ", func_type_index, ", ", StackVar(0));
         for (Index i = 0; i < num_params; ++i) {
           Write(", ", StackVar(num_params - i));
@@ -1839,11 +1884,11 @@ void CWriter::Write(const BinaryExpr& expr) {
       break;
 
     case Opcode::F32Copysign:
-      WritePrefixBinaryExpr(expr.opcode, "copysignf");
+      WritePrefixBinaryExpr(expr.opcode, "F32_COPYSIGN");
       break;
 
     case Opcode::F64Copysign:
-      WritePrefixBinaryExpr(expr.opcode, "copysign");
+      WritePrefixBinaryExpr(expr.opcode, "F64_COPYSIGN");
       break;
 
     default:
@@ -2068,10 +2113,10 @@ void CWriter::Write(const LoadExpr& expr) {
 
   Type result_type = expr.opcode.GetResultType();
   Write(StackVar(0, result_type), " = ", func, "(", ExternalPtr(memory->name),
-        ", (u64)(", StackVar(0));
+        ", ", StackVar(0));
   if (expr.offset != 0)
-    Write(" + ", expr.offset);
-  Write("));", Newline());
+    Write(" + (u64)", expr.offset);
+  Write(");", Newline());
   DropTypes(1);
   PushType(result_type);
 }
@@ -2096,10 +2141,10 @@ void CWriter::Write(const StoreExpr& expr) {
   assert(module_->memories.size() == 1);
   Memory* memory = module_->memories[0];
 
-  Write(func, "(", ExternalPtr(memory->name), ", (u64)(", StackVar(1));
+  Write(func, "(", ExternalPtr(memory->name), ", ", StackVar(1));
   if (expr.offset != 0)
-    Write(" + ", expr.offset);
-  Write("), ", StackVar(0), ");", Newline());
+    Write(" + (u64)", expr.offset);
+  Write(", ", StackVar(0), ");", Newline());
   DropTypes(2);
 }
 
@@ -2135,11 +2180,11 @@ void CWriter::Write(const UnaryExpr& expr) {
       break;
 
     case Opcode::F32Abs:
-      WriteSimpleUnaryExpr(expr.opcode, "fabsf");
+      WriteSimpleUnaryExpr(expr.opcode, "F32_ABS");
       break;
 
     case Opcode::F64Abs:
-      WriteSimpleUnaryExpr(expr.opcode, "fabs");
+      WriteSimpleUnaryExpr(expr.opcode, "F64_ABS");
       break;
 
     case Opcode::F32Sqrt:
