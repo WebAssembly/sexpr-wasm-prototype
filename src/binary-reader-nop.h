@@ -190,6 +190,10 @@ class BinaryReaderNop : public BinaryReaderDelegate {
   Result OnOpcodeF64(uint64_t value) override { return Result::Ok; }
   Result OnOpcodeV128(v128 value) override { return Result::Ok; }
   Result OnOpcodeBlockSig(Type sig_type) override { return Result::Ok; }
+  Result OnArrayNew(Index type_index) override { return Result::Ok; }
+  Result OnArrayGet(Index type_index) override { return Result::Ok; }
+  Result OnArraySet(Index type_index) override { return Result::Ok; }
+  Result OnArrayLen(Index type_index) override { return Result::Ok; }
   Result OnAtomicLoadExpr(Opcode opcode,
                           uint32_t alignment_log2,
                           Address offset) override {
@@ -263,6 +267,13 @@ class BinaryReaderNop : public BinaryReaderDelegate {
   Result OnMemoryGrowExpr() override { return Result::Ok; }
   Result OnMemoryInitExpr(Index segment_index) override { return Result::Ok; }
   Result OnMemorySizeExpr() override { return Result::Ok; }
+  Result OnStructNew(Index type_index) override { return Result::Ok; }
+  Result OnStructGet(Index type_index, Index field_index) override {
+    return Result::Ok;
+  }
+  Result OnStructSet(Index type_index, Index field_index) override {
+    return Result::Ok;
+  }
   Result OnTableCopyExpr(Index dst_index, Index src_index) override {
     return Result::Ok;
   }

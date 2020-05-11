@@ -30,7 +30,7 @@ using TypeVector = std::vector<Type>;
 class Type {
  public:
   // Matches binary format, do not change.
-  enum Enum {
+  enum Enum : int32_t {
     I32 = -0x01,      // 0x7f
     I64 = -0x02,      // 0x7e
     F32 = -0x03,      // 0x7d
@@ -41,6 +41,7 @@ class Type {
     Funcref = -0x10,  // 0x70
     Anyref = -0x11,   // 0x6f
     Nullref = -0x12,  // 0x6e
+    RefT = -0x13,     // 0x6d
     Exnref = -0x18,   // 0x68
     Func = -0x20,     // 0x60
     Struct = -0x21,   // 0x5f
@@ -56,14 +57,18 @@ class Type {
   };
 
   Type() = default;  // Provided so Type can be member of a union.
-  Type(int32_t code) : enum_(static_cast<Enum>(code)) {}
-  Type(Enum e) : enum_(e) {}
-  operator Enum() const { return enum_; }
+  Type(int32_t code) : enum_(static_cast<Enum>(code)) {
+    assert(enum_ != RefT);  // Use MakeRefT below instead!
+  }
+  Type(Enum e) : enum_(e) {
+    assert(e != RefT);  // Use MakeRefT below instead!
+  }
+  operator Enum() const { return IsRefT() ? RefT : enum_; }
 
   bool IsRef() const {
     return enum_ == Type::Anyref || enum_ == Type::Funcref ||
            enum_ == Type::Nullref || enum_ == Type::Exnref ||
-           enum_ == Type::Hostref;
+           enum_ == Type::Hostref || IsRefT();
   }
 
   bool IsNullableRef() const {
@@ -72,7 +77,7 @@ class Type {
   }
 
   const char* GetName() const {
-    switch (enum_) {
+    switch (operator Enum()) {
       case Type::I32:     return "i32";
       case Type::I64:     return "i64";
       case Type::F32:     return "f32";
@@ -81,12 +86,15 @@ class Type {
       case Type::I8:      return "i8";
       case Type::I16:     return "i16";
       case Type::Funcref: return "funcref";
-      case Type::Func:    return "func";
-      case Type::Exnref:  return "exnref";
-      case Type::Void:    return "void";
-      case Type::Any:     return "any";
       case Type::Anyref:  return "anyref";
       case Type::Nullref: return "nullref";
+      case Type::RefT:    return "ref T";
+      case Type::Exnref:  return "exnref";
+      case Type::Func:    return "func";
+      case Type::Struct:  return "struct";
+      case Type::Array:   return "array";
+      case Type::Void:    return "void";
+      case Type::Any:     return "any";
       default:            return "<type_index>";
     }
   }
@@ -102,7 +110,7 @@ class Type {
   //   (type $T (func (result i32 i64)))
   //   ...
   //   (block (type $T) ...)
-  // 
+  //
   bool IsIndex() const { return static_cast<int32_t>(enum_) >= 0; }
 
   Index GetIndex() const {
@@ -112,7 +120,7 @@ class Type {
 
   TypeVector GetInlineVector() const {
     assert(!IsIndex());
-    switch (enum_) {
+    switch (operator Enum()) {
       case Type::Void:
         return TypeVector();
 
@@ -124,6 +132,7 @@ class Type {
       case Type::Funcref:
       case Type::Anyref:
       case Type::Nullref:
+      case Type::RefT:
       case Type::Exnref:
         return TypeVector(this, this + 1);
 
@@ -131,6 +140,51 @@ class Type {
         WABT_UNREACHABLE;
     }
   }
+
+  // Functions for handling types of the form (ref $T), where $T is an index
+  // into the type section. Rather than storing an additional field in the Type
+  // struct, it's more efficient to use the extra bits in the enum to encode
+  // the index. For example, RefT is encoded as -0x13 (0xffffffff6d):
+  //
+  //    1111 1111 1111 1111 1111 1111 0110 1101
+  //       f    f    f    f    f    f    6    d
+  //
+  // We can store the index in the top bits (making sure to keep the MSB set so
+  // the number remains negative), giving us 23 bits to use for the type index.
+  //
+  //    1nnn nnnn nnnn nnnn nnnn nnnn 0110 1101
+  //
+  static const uint32_t kRefTMask = 0x800000ff;
+  static const uint32_t kRefTSignature =
+      static_cast<uint32_t>(RefT) & kRefTMask;
+
+  static const uint32_t kRefT_IndexMask = 0x7fffff00;
+  static const uint32_t kRefT_IndexShift = 8;
+
+  static Type MakeRefT(Index index) {
+    return static_cast<Enum>(kRefTSignature | (index << kRefT_IndexShift));
+  }
+
+  bool IsRefT() const {
+    return (static_cast<uint32_t>(enum_) & kRefTMask) == kRefTSignature;
+  }
+
+  static bool IsRefT(uint32_t code) {
+    return code == static_cast<uint32_t>(RefT);
+  }
+
+  Index GetRefTIndex() const {
+    assert(IsRefT());
+    return (static_cast<uint32_t>(enum_) & kRefT_IndexMask) >> kRefT_IndexShift;
+  }
+
+  friend bool operator==(Type lhs, Type rhs) { return lhs.enum_ == rhs.enum_; }
+  friend bool operator==(Type lhs, Type::Enum rhs) { return lhs.enum_ == rhs; }
+  friend bool operator==(Type::Enum lhs, Type rhs) { return lhs == rhs.enum_; }
+
+  friend bool operator!=(Type lhs, Type rhs) { return lhs.enum_ != rhs.enum_; }
+  friend bool operator!=(Type lhs, Type::Enum rhs) { return lhs.enum_ != rhs; }
+  friend bool operator!=(Type::Enum lhs, Type rhs) { return lhs != rhs.enum_; }
 
  private:
   Enum enum_;

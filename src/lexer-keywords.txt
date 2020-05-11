@@ -17,6 +17,10 @@ struct TokenInfo {
 %%
 anyref, Type::Anyref
 array, TokenType::Array
+array.get, TokenType::ArrayGet, Opcode::ArrayGet
+array.len, TokenType::ArrayLen, Opcode::ArrayLen
+array.new, TokenType::ArrayNew, Opcode::ArrayNew
+array.set, TokenType::ArraySet, Opcode::ArraySet
 assert_exhaustion, TokenType::AssertExhaustion
 assert_invalid, TokenType::AssertInvalid
 assert_malformed, TokenType::AssertMalformed
@@ -476,6 +480,7 @@ nullref, Type::Nullref
 offset, TokenType::Offset
 param, TokenType::Param
 quote, TokenType::Quote
+ref, TokenType::Ref
 ref.func, TokenType::RefFunc, Opcode::RefFunc
 ref.host, TokenType::RefHost
 ref.is_null, TokenType::RefIsNull, Opcode::RefIsNull
@@ -490,6 +495,9 @@ select, TokenType::Select, Opcode::Select
 shared, TokenType::Shared
 start, TokenType::Start
 struct, TokenType::Struct
+struct.get, TokenType::StructGet, Opcode::StructGet
+struct.new, TokenType::StructNew, Opcode::StructNew
+struct.set, TokenType::StructSet, Opcode::StructSet
 table.copy, TokenType::TableCopy, Opcode::TableCopy
 table.fill, TokenType::TableFill, Opcode::TableFill
 table.get, TokenType::TableGet, Opcode::TableGet

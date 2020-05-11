@@ -91,6 +91,11 @@ class WastParser {
   // folded expressions, plain instructions and block instructions.
   bool PeekMatchExpr();
 
+  // Returns true if the next two tokens can start a ValueType. Currently this
+  // is either TokenType::ValueType (e.g. i32, funcref, etc.) or a typed
+  // reference (e.g. "(ref $T)").
+  bool PeekMatchValueType();
+
   // Returns true if the next token's type is equal to the parameter. If so,
   // then the token is consumed.
   bool Match(TokenType);
@@ -118,6 +123,11 @@ class WastParser {
   // synchronized.
   Result Synchronize(SynchronizeFunc);
 
+  enum class ValueTypeAllowed {
+    Any,        // Allow any value type (given feature flags)
+    Reference,  // Allow any reference type (includes funcref for MVP)
+  };
+
   bool ParseBindVarOpt(std::string* name);
   Result ParseVar(Var* out_var);
   bool ParseVarOpt(Var* out_var, Var default_var = Var());
@@ -129,10 +139,10 @@ class WastParser {
   bool ParseElemExprOpt(ElemExpr* out_elem_expr);
   bool ParseElemExprListOpt(ElemExprVector* out_list);
   bool ParseElemExprVarListOpt(ElemExprVector* out_list);
-  Result ParseValueType(Type* out_type);
-  Result ParseValueTypeList(TypeVector* out_type_list);
-  Result ParseRefType(Type* out_type);
-  bool ParseRefTypeOpt(Type* out_type);
+  Result ParseValueType(TypeVar* out_type, ValueTypeAllowed);
+  Result ParseValueTypeList(TypeVarVector* out_type_list);
+  Result ParseRefType(TypeVar* out_type);
+  bool ParseRefTypeOpt(TypeVar* out_type);
   Result ParseQuotedText(std::string* text);
   bool ParseOffsetOpt(uint32_t* offset);
   bool ParseAlignOpt(uint32_t* align);
@@ -160,11 +170,11 @@ class WastParser {
   Result ParseFuncSignature(FuncSignature*, BindingHash* param_bindings);
   Result ParseUnboundFuncSignature(FuncSignature*);
   Result ParseBoundValueTypeList(TokenType,
-                                 TypeVector*,
+                                 TypeVarVector*,
                                  BindingHash*,
                                  Index binding_index_offset = 0);
-  Result ParseUnboundValueTypeList(TokenType, TypeVector*);
-  Result ParseResultList(TypeVector*);
+  Result ParseUnboundValueTypeList(TokenType, TypeVarVector*);
+  Result ParseResultList(TypeVarVector*);
   Result ParseInstrList(ExprList*);
   Result ParseTerminatingInstrList(ExprList*);
   Result ParseInstr(ExprList*);
@@ -184,12 +194,14 @@ class WastParser {
   Result ParseExpr(ExprList*);
   Result ParseGlobalType(Global*);
   Result ParseField(Field*);
-  Result ParseFieldList(std::vector<Field>*);
+  Result ParseFieldList(std::vector<Field>*, BindingHash*);
 
   template <typename T>
   Result ParsePlainInstrVar(Location, std::unique_ptr<Expr>*);
   template <typename T>
   Result ParsePlainLoadStoreInstr(Location, Token, std::unique_ptr<Expr>*);
+  template <typename T>
+  Result ParseStructFieldInstr(Location, std::unique_ptr<Expr>*);
 
   Result ParseCommandList(Script*, CommandPtrVector*);
   Result ParseCommand(Script*, CommandPtr*);

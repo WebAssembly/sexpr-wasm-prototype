@@ -199,6 +199,10 @@ class BinaryReaderDelegate {
   virtual Result OnOpcodeF64(uint64_t value) = 0;
   virtual Result OnOpcodeV128(v128 value) = 0;
   virtual Result OnOpcodeBlockSig(Type sig_type) = 0;
+  virtual Result OnArrayNew(Index type_index) = 0;
+  virtual Result OnArrayGet(Index type_index) = 0;
+  virtual Result OnArraySet(Index type_index) = 0;
+  virtual Result OnArrayLen(Index type_index) = 0;
   virtual Result OnAtomicLoadExpr(Opcode opcode,
                                   uint32_t alignment_log2,
                                   Address offset) = 0;
@@ -256,6 +260,9 @@ class BinaryReaderDelegate {
   virtual Result OnMemoryGrowExpr() = 0;
   virtual Result OnMemoryInitExpr(Index segment_index) = 0;
   virtual Result OnMemorySizeExpr() = 0;
+  virtual Result OnStructNew(Index type_index) = 0;
+  virtual Result OnStructGet(Index type_index, Index field_index) = 0;
+  virtual Result OnStructSet(Index type_index, Index field_index) = 0;
   virtual Result OnTableCopyExpr(Index dst_index, Index src_index) = 0;
   virtual Result OnElemDropExpr(Index segment_index) = 0;
   virtual Result OnTableInitExpr(Index segment_index, Index table_index) = 0;

@@ -64,6 +64,9 @@ std::string TypedValueToString(const TypedValue& tv) {
     case Type::Anyref:
       return StringPrintf("anyref:%" PRIzd, tv.value.Get<Ref>().index);
 
+    case Type::RefT:
+      return StringPrintf("ref %" PRIindex, tv.type.GetRefTIndex());
+
     case Type::Func:
     case Type::Struct:
     case Type::Array:
@@ -106,12 +109,12 @@ void WriteCall(Stream* stream,
                const Values& results,
                const Trap::Ptr& trap) {
   stream->Writef(PRIstringview "(", WABT_PRINTF_STRING_VIEW_ARG(name));
-  WriteValues(stream, func_type.params, params);
+  WriteValues(stream, func_type.entry.params, params);
   stream->Writef(") =>");
   if (!trap) {
     if (!results.empty()) {
       stream->Writef(" ");
-      WriteValues(stream, func_type.results, results);
+      WriteValues(stream, func_type.entry.results, results);
     }
     stream->Writef("\n");
   } else {

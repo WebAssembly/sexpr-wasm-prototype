@@ -117,6 +117,10 @@ class BinaryReaderIR : public BinaryReaderNop {
   Result BeginFunctionBody(Index index, Offset size) override;
   Result OnLocalDecl(Index decl_index, Index count, Type type) override;
 
+  Result OnArrayNew(Index type_index) override;
+  Result OnArrayGet(Index type_index) override;
+  Result OnArraySet(Index type_index) override;
+  Result OnArrayLen(Index type_index) override;
   Result OnAtomicLoadExpr(Opcode opcode,
                           uint32_t alignment_log2,
                           Address offset) override;
@@ -175,6 +179,9 @@ class BinaryReaderIR : public BinaryReaderNop {
   Result OnMemoryGrowExpr() override;
   Result OnMemoryInitExpr(Index segment_index) override;
   Result OnMemorySizeExpr() override;
+  Result OnStructNew(Index type_index) override;
+  Result OnStructGet(Index type_index, Index field_index) override;
+  Result OnStructSet(Index type_index, Index field_index) override;
   Result OnTableCopyExpr(Index dst_index, Index src_index) override;
   Result OnElemDropExpr(Index segment_index) override;
   Result OnTableInitExpr(Index segment_index, Index table_index) override;
@@ -368,7 +375,8 @@ void BinaryReaderIR::SetBlockDeclaration(BlockDeclaration* decl,
   } else {
     decl->has_func_type = false;
     decl->sig.param_types.clear();
-    decl->sig.result_types = sig_type.GetInlineVector();
+    auto results = sig_type.GetInlineVector();
+    decl->sig.result_types.assign(results.begin(), results.end());
   }
 }
 
@@ -631,6 +639,22 @@ Result BinaryReaderIR::OnLocalDecl(Index decl_index, Index count, Type type) {
   return Result::Ok;
 }
 
+Result BinaryReaderIR::OnArrayNew(Index type_index) {
+  return AppendExpr(MakeUnique<ArrayNewExpr>(Var(type_index)));
+}
+
+Result BinaryReaderIR::OnArrayGet(Index type_index) {
+  return AppendExpr(MakeUnique<ArrayGetExpr>(Var(type_index)));
+}
+
+Result BinaryReaderIR::OnArraySet(Index type_index) {
+  return AppendExpr(MakeUnique<ArraySetExpr>(Var(type_index)));
+}
+
+Result BinaryReaderIR::OnArrayLen(Index type_index) {
+  return AppendExpr(MakeUnique<ArrayLenExpr>(Var(type_index)));
+}
+
 Result BinaryReaderIR::OnAtomicLoadExpr(Opcode opcode,
                                         uint32_t alignment_log2,
                                         Address offset) {
@@ -880,6 +904,20 @@ Result BinaryReaderIR::OnMemorySizeExpr() {
   return AppendExpr(MakeUnique<MemorySizeExpr>());
 }
 
+Result BinaryReaderIR::OnStructNew(Index type_index) {
+  return AppendExpr(MakeUnique<StructNewExpr>(Var(type_index)));
+}
+
+Result BinaryReaderIR::OnStructGet(Index type_index, Index field_index) {
+  return AppendExpr(
+      MakeUnique<StructGetExpr>(Var(type_index), Var(field_index)));
+}
+
+Result BinaryReaderIR::OnStructSet(Index type_index, Index field_index) {
+  return AppendExpr(
+      MakeUnique<StructSetExpr>(Var(type_index), Var(field_index)));
+}
+
 Result BinaryReaderIR::OnTableCopyExpr(Index dst_index, Index src_index) {
   return AppendExpr(MakeUnique<TableCopyExpr>(Var(dst_index), Var(src_index)));
 }
@@ -937,7 +975,7 @@ Result BinaryReaderIR::OnReturnExpr() {
 }
 
 Result BinaryReaderIR::OnSelectExpr(Type result_type) {
-  return AppendExpr(MakeUnique<SelectExpr>(TypeVector{result_type}));
+  return AppendExpr(MakeUnique<SelectExpr>(TypeVarVector{result_type}));
 }
 
 Result BinaryReaderIR::OnGlobalSetExpr(Index global_index) {

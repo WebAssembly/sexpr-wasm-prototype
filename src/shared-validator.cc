@@ -63,8 +63,13 @@ Result SharedValidator::OnFuncType(const Location& loc,
 Result SharedValidator::OnStructType(const Location&,
                                      Index field_count,
                                      TypeMut* fields) {
-  struct_types_.emplace(num_types_++, StructType{TypeMutVector(
-                                          &fields[0], &fields[field_count])});
+  TypeVector types;
+  MutVector muts;
+  for (Index i = 0; i < field_count; ++i) {
+    types.push_back(fields[i].type);
+    muts.push_back(fields[i].mutable_);
+  }
+  struct_types_.emplace(num_types_++, StructType{types, muts});
   return Result::Ok;
 }
 
@@ -447,23 +452,57 @@ Result SharedValidator::CheckLocalIndex(Var local_var, Type* out_type) {
   return Result::Ok;
 }
 
-Result SharedValidator::CheckFuncTypeIndex(Var sig_var, FuncType* out) {
-  Result result = CheckIndex(sig_var, num_types_, "function type");
+template <typename T>
+Result SharedValidator::CheckTypeIndex(Var var,
+                                       const std::map<Index, T>& map,
+                                       T* out,
+                                       const char* desc1,
+                                       const char* desc2) {
+  Result result = CheckIndex(var, num_types_, desc1);
   if (Failed(result)) {
-    *out = FuncType{};
+    *out = T{};
     return Result::Error;
   }
 
-  auto iter = func_types_.find(sig_var.index());
-  if (iter == func_types_.end()) {
-    return PrintError(sig_var.loc, "type %d is not a function",
-                      sig_var.index());
+  auto iter = map.find(var.index());
+  if (iter == map.end()) {
+    return PrintError(var.loc, "type %d is not %s", var.index(), desc2);
   }
 
   if (out) {
     *out = iter->second;
   }
   return Result::Ok;
+}
+
+Result SharedValidator::CheckFuncTypeIndex(Var sig_var, FuncType* out) {
+  return CheckTypeIndex(sig_var, func_types_, out, "function type",
+                        "a function");
+}
+
+Result SharedValidator::CheckStructTypeIndex(Var type_var, StructType* out) {
+  return CheckTypeIndex(type_var, struct_types_, out, "struct type",
+                        "a struct");
+}
+
+Result SharedValidator::CheckArrayTypeIndex(Var type_var, ArrayType* out) {
+  return CheckTypeIndex(type_var, array_types_, out, "array type", "an array");
+}
+
+Result SharedValidator::CheckStructFieldIndex(const StructType& struct_type,
+                                              Var field_var,
+                                              TypeMut* out) {
+  Result result =
+      CheckIndex(field_var, struct_type.types.size(), "struct field");
+  if (out) {
+    if (Succeeded(result)) {
+      *out = TypeMut{struct_type.types[field_var.index()],
+                     struct_type.muts[field_var.index()]};
+    } else {
+      *out = TypeMut{};
+    }
+  }
+  return result;
 }
 
 Result SharedValidator::CheckFuncIndex(Var func_var, FuncType* out) {
@@ -592,6 +631,48 @@ Result SharedValidator::CheckAtomicAlign(const Location& loc,
     return Result::Error;
   }
   return Result::Ok;
+}
+
+Result SharedValidator::OnArrayGet(const Location& loc, Var type_var) {
+  Result result = Result::Ok;
+  expr_loc_ = &loc;
+  ArrayType array_type;
+  result |= CheckArrayTypeIndex(type_var, &array_type);
+  result |= typechecker_.OnArrayGet(Type::MakeRefT(type_var.index()),
+                                    array_type.field.type);
+  return result;
+}
+
+Result SharedValidator::OnArrayLen(const Location& loc, Var type_var) {
+  Result result = Result::Ok;
+  expr_loc_ = &loc;
+  ArrayType array_type;
+  result |= CheckArrayTypeIndex(type_var, &array_type);
+  result |= typechecker_.OnArrayLen(Type::MakeRefT(type_var.index()));
+  return result;
+}
+
+Result SharedValidator::OnArrayNew(const Location& loc, Var type_var) {
+  Result result = Result::Ok;
+  expr_loc_ = &loc;
+  ArrayType array_type;
+  result |= CheckArrayTypeIndex(type_var, &array_type);
+  result |= typechecker_.OnArrayNew(Type::MakeRefT(type_var.index()),
+                                    array_type.field.type);
+  return result;
+}
+
+Result SharedValidator::OnArraySet(const Location& loc, Var type_var) {
+  Result result = Result::Ok;
+  expr_loc_ = &loc;
+  ArrayType array_type;
+  result |= CheckArrayTypeIndex(type_var, &array_type);
+  if (!array_type.field.mutable_) {
+    result |= PrintError(loc, "can't array.set on immutable array");
+  }
+  result |= typechecker_.OnArraySet(Type::MakeRefT(type_var.index()),
+                                    array_type.field.type);
+  return result;
 }
 
 Result SharedValidator::OnAtomicFence(const Location& loc,
@@ -1049,6 +1130,49 @@ Result SharedValidator::OnStore(const Location& loc,
   result |= CheckMemoryIndex(Var(0, loc));
   result |= CheckAlign(loc, alignment, opcode.GetMemorySize());
   result |= typechecker_.OnStore(opcode);
+  return result;
+}
+
+Result SharedValidator::OnStructGet(const Location& loc,
+                                    Var type_var,
+                                    Var field_var) {
+  Result result = Result::Ok;
+  expr_loc_ = &loc;
+  StructType struct_type;
+  TypeMut type_mut;
+  result |= CheckStructTypeIndex(type_var, &struct_type);
+  result |= CheckStructFieldIndex(struct_type, field_var, &type_mut);
+  result |=
+      typechecker_.OnStructGet(Type::MakeRefT(type_var.index()), type_mut.type);
+  return result;
+}
+
+Result SharedValidator::OnStructNew(const Location& loc, Var type_var) {
+  Result result = Result::Ok;
+  expr_loc_ = &loc;
+  StructType struct_type;
+  result |= CheckStructTypeIndex(type_var, &struct_type);
+  result |= typechecker_.OnStructNew(Type::MakeRefT(type_var.index()),
+                                     struct_type.types);
+  return result;
+}
+
+Result SharedValidator::OnStructSet(const Location& loc,
+                                    Var type_var,
+                                    Var field_var) {
+  Result result = Result::Ok;
+  expr_loc_ = &loc;
+  StructType struct_type;
+  TypeMut type_mut;
+  result |= CheckStructTypeIndex(type_var, &struct_type);
+  result |= CheckStructFieldIndex(struct_type, field_var, &type_mut);
+  if (!type_mut.mutable_) {
+    result |= PrintError(
+        loc, "can't struct.set on immutable field at index %" PRIindex ".",
+        field_var.index());
+  }
+  result |=
+      typechecker_.OnStructSet(Type::MakeRefT(type_var.index()), type_mut.type);
   return result;
 }
 

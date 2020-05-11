@@ -86,7 +86,7 @@ void ModuleContext::EndBlock() {
 
 void ModuleContext::BeginFunc(const Func& func) {
   label_stack_.clear();
-  label_stack_.emplace_back(LabelType::Func, std::string(), TypeVector(),
+  label_stack_.emplace_back(LabelType::Func, std::string(), TypeVarVector(),
                             func.decl.sig.result_types);
   current_func_ = &func;
 }
@@ -102,11 +102,14 @@ ModuleContext::Arities ModuleContext::GetExprArity(const Expr& expr) const {
     case ExprType::Binary:
     case ExprType::Compare:
     case ExprType::TableGrow:
+    case ExprType::ArrayGet:
+    case ExprType::ArrayNew:
       return { 2, 1 };
 
     case ExprType::AtomicStore:
     case ExprType::Store:
     case ExprType::TableSet:
+    case ExprType::StructSet:
       return { 2, 0 };
 
     case ExprType::Block:
@@ -171,6 +174,7 @@ ModuleContext::Arities ModuleContext::GetExprArity(const Expr& expr) const {
     case ExprType::MemoryFill:
     case ExprType::MemoryCopy:
     case ExprType::TableCopy:
+    case ExprType::ArraySet:
       return { 3, 0 };
 
     case ExprType::AtomicLoad:
@@ -181,6 +185,8 @@ ModuleContext::Arities ModuleContext::GetExprArity(const Expr& expr) const {
     case ExprType::Unary:
     case ExprType::TableGet:
     case ExprType::RefIsNull:
+    case ExprType::StructGet:
+    case ExprType::ArrayLen:
       return { 1, 1 };
 
     case ExprType::Drop:
@@ -257,6 +263,13 @@ ModuleContext::Arities ModuleContext::GetExprArity(const Expr& expr) const {
 
     case ExprType::SimdShuffleOp:
       return { 2, 1 };
+
+    case ExprType::StructNew: {
+      const Var& var = cast<StructNewExpr>(&expr)->var;
+      const StructType* struct_type = module.GetStructType(var);
+      Index field_count = struct_type ? struct_type->fields.size() : 0;
+      return {field_count, 1};
+    }
 
     default:
       fprintf(stderr, "bad expr type: %s\n", GetExprTypeName(expr));

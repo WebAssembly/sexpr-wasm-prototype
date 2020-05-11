@@ -162,6 +162,13 @@ bool IsPlainInstr(TokenType token_type) {
     case TokenType::Ternary:
     case TokenType::SimdLaneOp:
     case TokenType::SimdShuffleOp:
+    case TokenType::StructNew:
+    case TokenType::StructGet:
+    case TokenType::StructSet:
+    case TokenType::ArrayNew:
+    case TokenType::ArrayGet:
+    case TokenType::ArraySet:
+    case TokenType::ArrayLen:
       return true;
     default:
       return false;
@@ -290,8 +297,8 @@ Result CheckTypeIndex(const Location& loc,
 }
 
 Result CheckTypes(const Location& loc,
-                  const TypeVector& actual,
-                  const TypeVector& expected,
+                  const TypeVarVector& actual,
+                  const TypeVarVector& expected,
                   const char* desc,
                   const char* index_kind,
                   Errors* errors) {
@@ -517,6 +524,10 @@ bool WastParser::PeekMatchLpar(TokenType type) {
 
 bool WastParser::PeekMatchExpr() {
   return IsExpr(PeekPair());
+}
+
+bool WastParser::PeekMatchValueType() {
+  return PeekMatch(TokenType::ValueType) || PeekMatchLpar(TokenType::Ref);
 }
 
 bool WastParser::Match(TokenType type) {
@@ -765,79 +776,89 @@ bool WastParser::ParseElemExprVarListOpt(ElemExprVector* out_list) {
   return !out_list->empty();
 }
 
-Result WastParser::ParseValueType(Type* out_type) {
+Result WastParser::ParseValueType(TypeVar* out_type, ValueTypeAllowed allowed) {
   WABT_TRACE(ParseValueType);
-  if (!PeekMatch(TokenType::ValueType)) {
+
+  if (PeekMatch(TokenType::ValueType)) {
+    Token token = Consume();
+    Type type = token.type();
+    bool is_enabled;
+    switch (type) {
+      case Type::V128:
+        is_enabled = options_->features.simd_enabled();
+        break;
+      case Type::Funcref:
+        // Funcref is OK even in MVP, as long as we're looking for References
+        // only (i.e. for table and elem types.)
+        is_enabled = options_->features.reference_types_enabled() ||
+                     allowed == ValueTypeAllowed::Reference;
+        break;
+      case Type::Anyref:
+      case Type::Hostref:
+        is_enabled = options_->features.reference_types_enabled();
+        break;
+      case Type::Exnref:
+        is_enabled = options_->features.exceptions_enabled();
+        break;
+      default:
+        is_enabled = true;
+        break;
+    }
+
+    if (allowed == ValueTypeAllowed::Reference && !type.IsRef()) {
+      return ErrorExpected({"funcref", "anyref", "nullref", "exnref"});
+    }
+
+    if (!is_enabled) {
+      Error(token.loc, "value type not allowed: %s", type.GetName());
+      return Result::Error;
+    }
+
+    *out_type = type;
+    return Result::Ok;
+  } else if (PeekMatchLpar(TokenType::Ref)) {  // (ref <var>)
+    Consume();  // Lpar
+    Token token = Consume();
+    // TODO: inline struct/array?
+    if (!options_->features.gc_enabled()) {
+      Error(token.loc, "value type not allowed: ref $T");
+      return Result::Error;
+    }
+
+    Var var;
+    CHECK_RESULT(ParseVar(&var));
+    EXPECT(Rpar);
+
+    *out_type = TypeVar(Type::MakeRefT(0), var);
+    return Result::Ok;
+  } else {
     return ErrorExpected({"i32", "i64", "f32", "f64", "v128", "anyref"});
   }
-
-  Token token = Consume();
-  Type type = token.type();
-  bool is_enabled;
-  switch (type) {
-    case Type::V128:
-      is_enabled = options_->features.simd_enabled();
-      break;
-    case Type::Anyref:
-    case Type::Funcref:
-    case Type::Hostref:
-      is_enabled = options_->features.reference_types_enabled();
-      break;
-    case Type::Exnref:
-      is_enabled = options_->features.exceptions_enabled();
-      break;
-    default:
-      is_enabled = true;
-      break;
-  }
-
-  if (!is_enabled) {
-    Error(token.loc, "value type not allowed: %s", type.GetName());
-    return Result::Error;
-  }
-
-  *out_type = type;
-  return Result::Ok;
 }
 
-Result WastParser::ParseValueTypeList(TypeVector* out_type_list) {
+Result WastParser::ParseValueTypeList(TypeVarVector* out_type_list) {
   WABT_TRACE(ParseValueTypeList);
-  while (PeekMatch(TokenType::ValueType))
-    out_type_list->push_back(Consume().type());
+  while (PeekMatchValueType()) {
+    TypeVar type;
+    CHECK_RESULT(ParseValueType(&type, ValueTypeAllowed::Any));
+    out_type_list->push_back(type);
+  }
 
   return Result::Ok;
 }
 
-Result WastParser::ParseRefType(Type* out_type) {
+Result WastParser::ParseRefType(TypeVar* out_type) {
   WABT_TRACE(ParseRefType);
-  if (!PeekMatch(TokenType::ValueType)) {
-    return ErrorExpected({"funcref", "anyref", "nullref", "exnref"});
-  }
-
-  Token token = Consume();
-  Type type = token.type();
-  if (type == Type::Anyref && !options_->features.reference_types_enabled()) {
-    Error(token.loc, "value type not allowed: %s", type.GetName());
-    return Result::Error;
-  }
-
-  *out_type = type;
+  CHECK_RESULT(ParseValueType(out_type, ValueTypeAllowed::Reference));
   return Result::Ok;
 }
 
-bool WastParser::ParseRefTypeOpt(Type* out_type) {
+bool WastParser::ParseRefTypeOpt(TypeVar* out_type) {
   WABT_TRACE(ParseRefTypeOpt);
-  if (!PeekMatch(TokenType::ValueType)) {
+  if (!PeekMatchValueType()) {
     return false;
   }
-
-  Token token = Consume();
-  Type type = token.type();
-  if (type == Type::Anyref && !options_->features.reference_types_enabled()) {
-    return false;
-  }
-
-  *out_type = type;
+  CHECK_RESULT(ParseValueType(out_type, ValueTypeAllowed::Reference));
   return true;
 }
 
@@ -1169,7 +1190,7 @@ Result WastParser::ParseFuncModuleField(Module* module) {
     Func& func = field->func;
     CHECK_RESULT(ParseTypeUseOpt(&func.decl));
     CHECK_RESULT(ParseFuncSignature(&func.decl.sig, &func.bindings));
-    TypeVector local_types;
+    TypeVarVector local_types;
     CHECK_RESULT(ParseBoundValueTypeList(TokenType::Local, &local_types,
                                          &func.bindings, func.GetNumParams()));
     func.local_types.Set(local_types);
@@ -1206,7 +1227,7 @@ Result WastParser::ParseTypeModuleField(Module* module) {
       return Result::Error;
     }
     auto struct_type = MakeUnique<StructType>(name);
-    CHECK_RESULT(ParseFieldList(&struct_type->fields));
+    CHECK_RESULT(ParseFieldList(&struct_type->fields, &struct_type->bindings));
     field->type = std::move(struct_type);
   } else if (Match(TokenType::Array)) {
     if (!options_->features.gc_enabled()) {
@@ -1231,11 +1252,11 @@ Result WastParser::ParseField(Field* field) {
     // TODO: Share with ParseGlobalType?
     if (MatchLpar(TokenType::Mut)) {
       field->mutable_ = true;
-      CHECK_RESULT(ParseValueType(&field->type));
+      CHECK_RESULT(ParseValueType(&field->type, ValueTypeAllowed::Any));
       EXPECT(Rpar);
     } else {
       field->mutable_ = false;
-      CHECK_RESULT(ParseValueType(&field->type));
+      CHECK_RESULT(ParseValueType(&field->type, ValueTypeAllowed::Any));
     }
     return Result::Ok;
   };
@@ -1251,12 +1272,18 @@ Result WastParser::ParseField(Field* field) {
   return Result::Ok;
 }
 
-Result WastParser::ParseFieldList(std::vector<Field>* fields) {
+Result WastParser::ParseFieldList(std::vector<Field>* fields,
+                                  BindingHash* bindings) {
   WABT_TRACE(ParseFieldList);
-  while (PeekMatch(TokenType::ValueType) || PeekMatch(TokenType::Lpar)) {
+  for (Index index = 0;
+       PeekMatch(TokenType::ValueType) || PeekMatch(TokenType::Lpar); ++index) {
     Field field;
+    Location loc = GetLocation();
     CHECK_RESULT(ParseField(&field));
     fields->push_back(field);
+    if (!field.name.empty()) {
+      bindings->emplace(field.name, Binding(loc, index));
+    }
   }
   return Result::Ok;
 }
@@ -1467,7 +1494,7 @@ Result WastParser::ParseTableModuleField(Module* module) {
         MakeUnique<ImportModuleField>(std::move(import), GetLocation());
     module->AppendField(std::move(field));
   } else if (PeekMatch(TokenType::ValueType)) {
-    Type elem_type;
+    TypeVar elem_type;
     CHECK_RESULT(ParseRefType(&elem_type));
 
     EXPECT(Lpar);
@@ -1583,17 +1610,17 @@ Result WastParser::ParseUnboundFuncSignature(FuncSignature* sig) {
 }
 
 Result WastParser::ParseBoundValueTypeList(TokenType token,
-                                           TypeVector* types,
+                                           TypeVarVector* types,
                                            BindingHash* bindings,
                                            Index binding_index_offset) {
   WABT_TRACE(ParseBoundValueTypeList);
   while (MatchLpar(token)) {
     if (PeekMatch(TokenType::Var)) {
       std::string name;
-      Type type;
+      TypeVar type;
       Location loc = GetLocation();
       ParseBindVarOpt(&name);
-      CHECK_RESULT(ParseValueType(&type));
+      CHECK_RESULT(ParseValueType(&type, ValueTypeAllowed::Any));
       bindings->emplace(name,
                         Binding(loc, binding_index_offset + types->size()));
       types->push_back(type);
@@ -1606,7 +1633,7 @@ Result WastParser::ParseBoundValueTypeList(TokenType token,
 }
 
 Result WastParser::ParseUnboundValueTypeList(TokenType token,
-                                             TypeVector* types) {
+                                             TypeVarVector* types) {
   WABT_TRACE(ParseUnboundValueTypeList);
   while (MatchLpar(token)) {
     CHECK_RESULT(ParseValueTypeList(types));
@@ -1615,7 +1642,7 @@ Result WastParser::ParseUnboundValueTypeList(TokenType token,
   return Result::Ok;
 }
 
-Result WastParser::ParseResultList(TypeVector* result_types) {
+Result WastParser::ParseResultList(TypeVarVector* result_types) {
   WABT_TRACE(ParseResultList);
   return ParseUnboundValueTypeList(TokenType::Result, result_types);
 }
@@ -1685,6 +1712,17 @@ Result WastParser::ParsePlainLoadStoreInstr(Location loc,
   return Result::Ok;
 }
 
+template <typename T>
+Result WastParser::ParseStructFieldInstr(Location loc,
+                                         std::unique_ptr<Expr>* out_expr) {
+  Var struct_var;
+  Var field_var;
+  CHECK_RESULT(ParseVar(&struct_var));
+  CHECK_RESULT(ParseVar(&field_var));
+  out_expr->reset(new T(struct_var, field_var, loc));
+  return Result::Ok;
+}
+
 Result WastParser::ParsePlainInstr(std::unique_ptr<Expr>* out_expr) {
   WABT_TRACE(ParsePlainInstr);
   Location loc = GetLocation();
@@ -1706,7 +1744,7 @@ Result WastParser::ParsePlainInstr(std::unique_ptr<Expr>* out_expr) {
 
     case TokenType::Select: {
       Consume();
-      TypeVector result;
+      TypeVarVector result;
       if (options_->features.reference_types_enabled() &&
           MatchLpar(TokenType::Result)) {
         CHECK_RESULT(ParseValueTypeList(&result));
@@ -2108,6 +2146,41 @@ Result WastParser::ParsePlainInstr(std::unique_ptr<Expr>* out_expr) {
           new SimdShuffleOpExpr(token.opcode(), value, loc));
       break;
     }
+
+    case TokenType::StructNew:
+      ErrorUnlessOpcodeEnabled(Consume());
+      CHECK_RESULT(ParsePlainInstrVar<StructNewExpr>(loc, out_expr));
+      break;
+
+    case TokenType::StructGet:
+      ErrorUnlessOpcodeEnabled(Consume());
+      CHECK_RESULT(ParseStructFieldInstr<StructGetExpr>(loc, out_expr));
+      break;
+
+    case TokenType::StructSet:
+      ErrorUnlessOpcodeEnabled(Consume());
+      CHECK_RESULT(ParseStructFieldInstr<StructSetExpr>(loc, out_expr));
+      break;
+
+    case TokenType::ArrayNew:
+      ErrorUnlessOpcodeEnabled(Consume());
+      CHECK_RESULT(ParsePlainInstrVar<ArrayNewExpr>(loc, out_expr));
+      break;
+
+    case TokenType::ArrayGet:
+      ErrorUnlessOpcodeEnabled(Consume());
+      CHECK_RESULT(ParsePlainInstrVar<ArrayGetExpr>(loc, out_expr));
+      break;
+
+    case TokenType::ArraySet:
+      ErrorUnlessOpcodeEnabled(Consume());
+      CHECK_RESULT(ParsePlainInstrVar<ArraySetExpr>(loc, out_expr));
+      break;
+
+    case TokenType::ArrayLen:
+      ErrorUnlessOpcodeEnabled(Consume());
+      CHECK_RESULT(ParsePlainInstrVar<ArrayLenExpr>(loc, out_expr));
+      break;
 
     default:
       assert(
@@ -2675,11 +2748,11 @@ Result WastParser::ParseGlobalType(Global* global) {
   WABT_TRACE(ParseGlobalType);
   if (MatchLpar(TokenType::Mut)) {
     global->mutable_ = true;
-    CHECK_RESULT(ParseValueType(&global->type));
+    CHECK_RESULT(ParseValueType(&global->type, ValueTypeAllowed::Any));
     CHECK_RESULT(ErrorIfLpar({"i32", "i64", "f32", "f64"}));
     EXPECT(Rpar);
   } else {
-    CHECK_RESULT(ParseValueType(&global->type));
+    CHECK_RESULT(ParseValueType(&global->type, ValueTypeAllowed::Any));
   }
 
   return Result::Ok;

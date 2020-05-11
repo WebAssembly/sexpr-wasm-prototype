@@ -73,6 +73,32 @@ struct Var {
 };
 typedef std::vector<Var> VarVector;
 
+// TODO: Better name for this?
+struct TypeVar {
+  TypeVar() = default;
+  TypeVar(Type);
+  TypeVar(Type::Enum);
+  TypeVar(Type, Var);  // Only used for Type::RefT.
+  operator Type() const;
+  operator Type::Enum() const;
+
+  friend bool operator==(TypeVar lhs, TypeVar rhs) { return lhs.type == rhs.type; }
+  friend bool operator==(TypeVar lhs, Type rhs) { return lhs.type == rhs; }
+  friend bool operator==(Type lhs, TypeVar rhs) { return lhs == rhs.type; }
+  friend bool operator==(TypeVar lhs, Type::Enum rhs) { return lhs.type == rhs; }
+  friend bool operator==(Type::Enum lhs, TypeVar rhs) { return lhs == rhs.type; }
+
+  friend bool operator!=(TypeVar lhs, TypeVar rhs) { return lhs.type != rhs.type; }
+  friend bool operator!=(TypeVar lhs, Type rhs) { return lhs.type != rhs; }
+  friend bool operator!=(Type lhs, TypeVar rhs) { return lhs != rhs.type; }
+  friend bool operator!=(TypeVar lhs, Type::Enum rhs) { return lhs.type != rhs; }
+  friend bool operator!=(Type::Enum lhs, TypeVar rhs) { return lhs != rhs.type; }
+
+  Type type = Type::Void;
+  Var var;
+};
+typedef std::vector<TypeVar> TypeVarVector;
+
 struct Const {
   Const() : Const(Type::I32, uint32_t(0)) {}
 
@@ -183,13 +209,13 @@ struct Const {
 typedef std::vector<Const> ConstVector;
 
 struct FuncSignature {
-  TypeVector param_types;
-  TypeVector result_types;
+  TypeVarVector param_types;
+  TypeVarVector result_types;
 
   Index GetNumParams() const { return param_types.size(); }
   Index GetNumResults() const { return result_types.size(); }
-  Type GetParamType(Index index) const { return param_types[index]; }
-  Type GetResultType(Index index) const { return result_types[index]; }
+  TypeVar GetParamType(Index index) const { return param_types[index]; }
+  TypeVar GetResultType(Index index) const { return result_types[index]; }
 
   bool operator==(const FuncSignature&) const;
 };
@@ -231,15 +257,15 @@ class FuncType : public TypeEntry {
 
   Index GetNumParams() const { return sig.GetNumParams(); }
   Index GetNumResults() const { return sig.GetNumResults(); }
-  Type GetParamType(Index index) const { return sig.GetParamType(index); }
-  Type GetResultType(Index index) const { return sig.GetResultType(index); }
+  TypeVar GetParamType(Index index) const { return sig.GetParamType(index); }
+  TypeVar GetResultType(Index index) const { return sig.GetResultType(index); }
 
   FuncSignature sig;
 };
 
 struct Field {
   std::string name;
-  Type type = Type::Void;
+  TypeVar type = Type::Void;
   bool mutable_ = false;
 };
 
@@ -250,9 +276,10 @@ class StructType : public TypeEntry {
   }
 
   explicit StructType(string_view name = string_view())
-      : TypeEntry(TypeEntryKind::Struct) {}
+      : TypeEntry(TypeEntryKind::Struct, name) {}
 
   std::vector<Field> fields;
+  BindingHash bindings;
 };
 
 class ArrayType : public TypeEntry {
@@ -262,7 +289,7 @@ class ArrayType : public TypeEntry {
   }
 
   explicit ArrayType(string_view name = string_view())
-      : TypeEntry(TypeEntryKind::Array) {}
+      : TypeEntry(TypeEntryKind::Array, name) {}
 
   Field field;
 };
@@ -270,8 +297,8 @@ class ArrayType : public TypeEntry {
 struct FuncDeclaration {
   Index GetNumParams() const { return sig.GetNumParams(); }
   Index GetNumResults() const { return sig.GetNumResults(); }
-  Type GetParamType(Index index) const { return sig.GetParamType(index); }
-  Type GetResultType(Index index) const { return sig.GetResultType(index); }
+  TypeVar GetParamType(Index index) const { return sig.GetParamType(index); }
+  TypeVar GetResultType(Index index) const { return sig.GetResultType(index); }
 
   bool has_func_type = false;
   Var type_var;
@@ -279,6 +306,10 @@ struct FuncDeclaration {
 };
 
 enum class ExprType {
+  ArrayGet,
+  ArrayLen,
+  ArrayNew,
+  ArraySet,
   AtomicLoad,
   AtomicRmw,
   AtomicRmwCmpxchg,
@@ -325,6 +356,9 @@ enum class ExprType {
   SimdShuffleOp,
   LoadSplat,
   Store,
+  StructGet,
+  StructNew,
+  StructSet,
   TableCopy,
   ElemDrop,
   TableInit,
@@ -339,7 +373,7 @@ enum class ExprType {
   Unary,
   Unreachable,
 
-  First = AtomicLoad,
+  First = ArrayGet,
   Last = Unreachable
 };
 
@@ -462,11 +496,34 @@ typedef VarExpr<ExprType::TableGrow> TableGrowExpr;
 typedef VarExpr<ExprType::TableSize> TableSizeExpr;
 typedef VarExpr<ExprType::TableFill> TableFillExpr;
 
+typedef VarExpr<ExprType::StructNew> StructNewExpr;
+typedef VarExpr<ExprType::ArrayNew> ArrayNewExpr;
+typedef VarExpr<ExprType::ArrayGet> ArrayGetExpr;
+typedef VarExpr<ExprType::ArraySet> ArraySetExpr;
+typedef VarExpr<ExprType::ArrayLen> ArrayLenExpr;
+
+template <ExprType TypeEnum>
+class StructFieldExpr : public ExprMixin<TypeEnum> {
+ public:
+  StructFieldExpr(const Var& struct_var,
+                  const Var& field_var,
+                  const Location& loc = Location())
+      : ExprMixin<TypeEnum>(loc),
+        struct_var(struct_var),
+        field_var(field_var) {}
+
+  Var struct_var;
+  Var field_var;
+};
+
+typedef StructFieldExpr<ExprType::StructGet> StructGetExpr;
+typedef StructFieldExpr<ExprType::StructSet> StructSetExpr;
+
 class SelectExpr : public ExprMixin<ExprType::Select> {
  public:
-  SelectExpr(TypeVector type, const Location& loc = Location())
+  SelectExpr(TypeVarVector type, const Location& loc = Location())
       : ExprMixin<ExprType::Select>(loc), result_type(type) {}
-  TypeVector result_type;
+  TypeVarVector result_type;
 };
 
 class TableInitExpr : public ExprMixin<ExprType::TableInit> {
@@ -615,13 +672,13 @@ struct Event {
 
 class LocalTypes {
  public:
-  typedef std::pair<Type, Index> Decl;
+  typedef std::pair<TypeVar, Index> Decl;
   typedef std::vector<Decl> Decls;
 
   struct const_iterator {
     const_iterator(Decls::const_iterator decl, Index index)
         : decl(decl), index(index) {}
-    Type operator*() const { return decl->first; }
+    TypeVar operator*() const { return decl->first; }
     const_iterator& operator++();
     const_iterator operator++(int);
 
@@ -629,18 +686,19 @@ class LocalTypes {
     Index index;
   };
 
-  void Set(const TypeVector&);
+  void Set(const TypeVarVector&);
 
   const Decls& decls() const { return decls_; }
+  Decls& decls() { return decls_; }
 
-  void AppendDecl(Type type, Index count) {
+  void AppendDecl(TypeVar type, Index count) {
     if (count != 0) {
       decls_.emplace_back(type, count);
     }
   }
 
   Index size() const;
-  Type operator[](Index) const;
+  TypeVar operator[](Index) const;
 
   const_iterator begin() const { return {decls_.begin(), 0}; }
   const_iterator end() const { return {decls_.end(), 0}; }
@@ -677,10 +735,10 @@ inline bool operator!=(const LocalTypes::const_iterator& lhs,
 struct Func {
   explicit Func(string_view name) : name(name.to_string()) {}
 
-  Type GetParamType(Index index) const { return decl.GetParamType(index); }
-  Type GetResultType(Index index) const { return decl.GetResultType(index); }
-  Type GetLocalType(Index index) const;
-  Type GetLocalType(const Var& var) const;
+  TypeVar GetParamType(Index index) const { return decl.GetParamType(index); }
+  TypeVar GetResultType(Index index) const { return decl.GetResultType(index); }
+  TypeVar GetLocalType(Index index) const;
+  TypeVar GetLocalType(const Var& var) const;
   Index GetNumParams() const { return decl.GetNumParams(); }
   Index GetNumLocals() const { return local_types.size(); }
   Index GetNumParamsAndLocals() const {
@@ -700,7 +758,7 @@ struct Global {
   explicit Global(string_view name) : name(name.to_string()) {}
 
   std::string name;
-  Type type = Type::Void;
+  TypeVar type = Type::Void;
   bool mutable_ = false;
   ExprList init_expr;
 };
@@ -711,7 +769,7 @@ struct Table {
 
   std::string name;
   Limits elem_limits;
-  Type elem_type;
+  TypeVar elem_type;
 };
 
 enum class ElemExprKind {
@@ -736,7 +794,7 @@ struct ElemSegment {
   SegmentKind kind = SegmentKind::Active;
   std::string name;
   Var table_var;
-  Type elem_type;
+  TypeVar elem_type;
   ExprList offset;
   ElemExprVector elem_exprs;
 };
@@ -979,11 +1037,13 @@ class StartModuleField : public ModuleFieldMixin<ModuleFieldType::Start> {
 };
 
 struct Module {
-  Index GetFuncTypeIndex(const Var&) const;
+  Index GetTypeIndex(const Var&) const;
   Index GetFuncTypeIndex(const FuncDeclaration&) const;
   Index GetFuncTypeIndex(const FuncSignature&) const;
   const FuncType* GetFuncType(const Var&) const;
   FuncType* GetFuncType(const Var&);
+  const StructType* GetStructType(const Var&) const;
+  StructType* GetStructType(const Var&);
   Index GetFuncIndex(const Var&) const;
   const Func* GetFunc(const Var&) const;
   Func* GetFunc(const Var&);

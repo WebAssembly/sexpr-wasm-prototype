@@ -32,6 +32,36 @@ inline bool operator!=(Ref lhs, Ref rhs) {
   return lhs.index != rhs.index;
 }
 
+//// TypeEntry ////
+inline TypeEntry::TypeEntry(TypeEntryKind kind) : kind(kind) {}
+
+//// FuncTypeEntry ////
+// static
+inline bool FuncTypeEntry::classof(const TypeEntry* entry) {
+  return entry->kind == skind;
+}
+
+inline FuncTypeEntry::FuncTypeEntry(ValueTypes params, ValueTypes results)
+    : TypeEntry(skind), params(params), results(results) {}
+
+//// StructTypeEntry ////
+// static
+inline bool StructTypeEntry::classof(const TypeEntry* entry) {
+  return entry->kind == skind;
+}
+
+inline StructTypeEntry::StructTypeEntry(ValueTypes types, Mutabilities muts)
+    : TypeEntry(skind), types(types), muts(muts) {}
+
+//// ArrayTypeEntry ////
+// static
+inline bool ArrayTypeEntry::classof(const TypeEntry* entry) {
+  return entry->kind == skind;
+}
+
+inline ArrayTypeEntry::ArrayTypeEntry(ValueType type, Mutability mut)
+    : TypeEntry(skind), type(type), mut(mut) {}
+
 //// ExternType ////
 inline ExternType::ExternType(ExternKind kind) : kind(kind) {}
 
@@ -41,8 +71,11 @@ inline bool FuncType::classof(const ExternType* type) {
   return type->kind == skind;
 }
 
+inline FuncType::FuncType(const FuncTypeEntry& entry)
+    : ExternType(ExternKind::Func), entry(entry) {}
+
 inline FuncType::FuncType(ValueTypes params, ValueTypes results)
-    : ExternType(ExternKind::Func), params(params), results(results) {}
+    : ExternType(ExternKind::Func), entry(params, results) {}
 
 //// TableType ////
 // static
@@ -119,6 +152,20 @@ inline ExportType::ExportType(const ExportType& other)
 inline ExportType& ExportType::operator=(const ExportType& other) {
   if (this != &other) {
     name = other.name;
+    type = other.type->Clone();
+  }
+  return *this;
+}
+
+//// TypeDesc ////
+
+inline TypeDesc::TypeDesc(std::unique_ptr<TypeEntry> type)
+    : type(std::move(type)) {}
+
+inline TypeDesc::TypeDesc(const TypeDesc& desc) : type(desc.type->Clone()) {}
+
+inline TypeDesc& TypeDesc::operator=(const TypeDesc& other) {
+  if (this != &other) {
     type = other.type->Clone();
   }
   return *this;
@@ -923,6 +970,149 @@ inline Thread::Ptr Thread::New(Store& store, const Options& options) {
 
 inline Store& Thread::store() {
   return store_;
+}
+
+//// Struct ////
+// static
+inline bool Struct::classof(const Object* obj) {
+  return obj->kind() == skind;
+}
+
+// static
+inline Struct::Ptr Struct::New(Store& store,
+                               const StructTypeEntry& entry,
+                               const Values& values) {
+  return store.Alloc<Struct>(store, entry, values);
+}
+
+template <typename T>
+inline Result Struct::Get(Index field, T* out) const {
+  if (!(IsValidField(field) && HasType<T>(type_.types[field]))) {
+    return Result::Error;
+  }
+
+  *out = values_[field].Get<T>();
+  return Result::Ok;
+}
+
+template <typename T>
+inline Result WABT_VECTORCALL Struct::Set(Index field, T val) {
+  if (!(IsValidField(field) && HasType<T>(type_.types[field]) &&
+        type_.muts[field] == Mutability::Var)) {
+    return Result::Error;
+  }
+
+  values_[field].Set<T>(val);
+  return Result::Ok;
+}
+
+inline Value Struct::UnsafeGet(Index field) const {
+  assert(IsValidField(field));
+  return values_[field];
+}
+
+template <typename T>
+inline T WABT_VECTORCALL Struct::UnsafeGet(Index field) const {
+  assert(IsValidField(field));
+  RequireType<T>(type_.types[field]);
+  return values_[field].Get<T>();
+}
+
+inline void Struct::UnsafeSet(Index field, Value val) {
+  assert(IsValidField(field));
+  values_[field] = val;
+}
+
+inline const StructTypeEntry& Struct::type() const {
+  return type_;
+}
+
+inline bool Struct::IsValidField(Index field) const {
+  return field < values_.size();
+}
+
+//// Array ////
+// static
+inline bool Array::classof(const Object* obj) {
+  return obj->kind() == skind;
+}
+
+// static
+inline Array::Ptr Array::New(Store& store,
+                             const ArrayTypeEntry& entry,
+                             Value value,
+                             Index size) {
+  return store.Alloc<Array>(store, entry, value, size);
+}
+
+inline Index Array::Len() const {
+  return values_.size();
+}
+
+inline Result Array::Get(Index index, Value* out) const {
+  if (!IsValidIndex(index)) {
+    return Result::Error;
+  }
+  *out = values_[index];
+  return Result::Ok;
+}
+
+template <typename T>
+inline Result Array::Get(Index index, T* out) const {
+  if (!(IsValidIndex(index) && HasType<T>(type_.type))) {
+    return Result::Error;
+  }
+
+  *out = values_[index].Get<T>();
+  return Result::Ok;
+}
+
+inline Result Array::Set(Index index, Value val) {
+  if (!IsValidIndex(index)) {
+    return Result::Error;
+  }
+  values_[index] = val;
+  return Result::Ok;
+}
+
+template <typename T>
+inline Result WABT_VECTORCALL Array::Set(Index index, T val) {
+  if (!(IsValidIndex(index) && HasType<T>(type_.type) &&
+        type_.mut == Mutability::Var)) {
+    return Result::Error;
+  }
+
+  values_[index].Set<T>(val);
+  return Result::Ok;
+}
+
+inline Value Array::UnsafeGet(Index index) const {
+  assert(IsValidIndex(index));
+  return values_[index];
+}
+
+template <typename T>
+inline T WABT_VECTORCALL Array::UnsafeGet(Index index) const {
+  assert(IsValidIndex(index));
+  RequireType<T>(type_.type);
+  return values_[index].Get<T>();
+}
+
+inline Result Array::UnsafeSet(Index index, Value val) {
+  if (!IsValidIndex(index)) {
+    return Result::Error;
+  }
+
+  values_[index] = val;
+  return Result::Ok;
+}
+
+inline const ArrayTypeEntry& Array::type() const {
+  return type_;
+}
+
+inline bool Array::IsValidIndex(Index index) const {
+  return index < values_.size();
 }
 
 }  // namespace interp

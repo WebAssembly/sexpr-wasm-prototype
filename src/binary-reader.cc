@@ -99,6 +99,7 @@ class BinaryReader {
   Result ReadS32Leb128(uint32_t* out_value, const char* desc) WABT_WARN_UNUSED;
   Result ReadS64Leb128(uint64_t* out_value, const char* desc) WABT_WARN_UNUSED;
   Result ReadType(Type* out_value, const char* desc) WABT_WARN_UNUSED;
+  Result ReadValueType(Type* out_value, const char* desc) WABT_WARN_UNUSED;
   Result ReadExternalKind(ExternalKind* out_value,
                           const char* desc) WABT_WARN_UNUSED;
   Result ReadStr(string_view* out_str, const char* desc) WABT_WARN_UNUSED;
@@ -110,6 +111,7 @@ class BinaryReader {
   Result ReadCount(Index* index, const char* desc) WABT_WARN_UNUSED;
   Result ReadField(TypeMut* out_value) WABT_WARN_UNUSED;
 
+  // TODO: Rename to IsValueType.
   bool IsConcreteType(Type);
   bool IsBlockType(Type);
 
@@ -298,7 +300,13 @@ Result BinaryReader::ReadS64Leb128(uint64_t* out_value, const char* desc) {
 Result BinaryReader::ReadType(Type* out_value, const char* desc) {
   uint32_t type = 0;
   CHECK_RESULT(ReadS32Leb128(&type, desc));
-  *out_value = static_cast<Type>(type);
+  if (Type::IsRefT(type)) {
+    Index index;
+    CHECK_RESULT(ReadS32Leb128(&index, "type index"));
+    *out_value = Type::MakeRefT(index);
+  } else {
+    *out_value = static_cast<Type>(type);
+  }
   return Result::Ok;
 }
 
@@ -408,6 +416,9 @@ bool BinaryReader::IsConcreteType(Type type) {
 
     case Type::Exnref:
       return options_.features.exceptions_enabled();
+
+    case Type::RefT:
+      return options_.features.gc_enabled();
 
     default:
       return false;
@@ -1553,6 +1564,66 @@ Result BinaryReader::ReadFunctionBody(Offset end_offset) {
       case Opcode::RefIsNull: {
         CALLBACK(OnRefIsNullExpr);
         CALLBACK0(OnOpcodeBare);
+        break;
+      }
+
+      case Opcode::StructNew: {
+        Index type;
+        CHECK_RESULT(ReadIndex(&type, "type index"));
+        CALLBACK(OnStructNew, type);
+        CALLBACK(OnOpcodeUint32, type);
+        break;
+      }
+
+      case Opcode::StructGet: {
+        Index type;
+        Index field;
+        CHECK_RESULT(ReadIndex(&type, "type index"));
+        CHECK_RESULT(ReadIndex(&field, "field index"));
+        CALLBACK(OnStructGet, type, field);
+        CALLBACK(OnOpcodeUint32Uint32, type, field);
+        break;
+      }
+
+      case Opcode::StructSet: {
+        Index type;
+        Index field;
+        CHECK_RESULT(ReadIndex(&type, "type index"));
+        CHECK_RESULT(ReadIndex(&field, "field index"));
+        CALLBACK(OnStructSet, type, field);
+        CALLBACK(OnOpcodeUint32Uint32, type, field);
+        break;
+      }
+
+      case Opcode::ArrayNew: {
+        Index type;
+        CHECK_RESULT(ReadIndex(&type, "type index"));
+        CALLBACK(OnArrayNew, type);
+        CALLBACK(OnOpcodeUint32, type);
+        break;
+      }
+
+      case Opcode::ArrayGet: {
+        Index type;
+        CHECK_RESULT(ReadIndex(&type, "type index"));
+        CALLBACK(OnArrayGet, type);
+        CALLBACK(OnOpcodeUint32, type);
+        break;
+      }
+
+      case Opcode::ArraySet: {
+        Index type;
+        CHECK_RESULT(ReadIndex(&type, "type index"));
+        CALLBACK(OnArraySet, type);
+        CALLBACK(OnOpcodeUint32, type);
+        break;
+      }
+
+      case Opcode::ArrayLen: {
+        Index type;
+        CHECK_RESULT(ReadIndex(&type, "type index"));
+        CALLBACK(OnArrayLen, type);
+        CALLBACK(OnOpcodeUint32, type);
         break;
       }
 

@@ -56,6 +56,9 @@ void WriteOpcode(Stream* stream, Opcode opcode) {
 
 void WriteType(Stream* stream, Type type, const char* desc) {
   WriteS32Leb128(stream, type, desc ? desc : type.GetName());
+  if (type.IsRefT()) {
+    WriteS32Leb128(stream, type.GetRefTIndex(), "type index");
+  }
 }
 
 void WriteLimits(Stream* stream, const Limits* limits) {
@@ -135,6 +138,8 @@ class BinaryWriter {
                                RelocType reloc_type);
   template <typename T>
   void WriteLoadStoreExpr(const Func* func, const Expr* expr, const char* desc);
+  template <typename T>
+  void WriteDataTypeExpr(const Expr* expr, Opcode opcode, const char* desc);
   void WriteExpr(const Func* func, const Expr* expr);
   void WriteExprList(const Func* func, const ExprList& exprs);
   void WriteInitExpr(const ExprList& expr);
@@ -241,7 +246,7 @@ void BinaryWriter::WriteBlockDecl(const BlockDeclaration& decl) {
     return;
   }
 
-  Index index = decl.has_func_type ? module_->GetFuncTypeIndex(decl.type_var)
+  Index index = decl.has_func_type ? module_->GetTypeIndex(decl.type_var)
                                    : module_->GetFuncTypeIndex(decl.sig);
   assert(index != kInvalidIndex);
   WriteS32Leb128(stream_, index, "block type function index");
@@ -389,8 +394,33 @@ void BinaryWriter::WriteLoadStoreExpr(const Func* func,
   WriteU32Leb128(stream_, typed_expr->offset, desc);
 }
 
+template <typename T>
+void BinaryWriter::WriteDataTypeExpr(const Expr* expr,
+                                     Opcode opcode,
+                                     const char* desc) {
+  Index index = module_->GetTypeIndex(cast<T>(expr)->var);
+  WriteOpcode(stream_, opcode);
+  WriteU32Leb128(stream_, index, desc);
+}
+
 void BinaryWriter::WriteExpr(const Func* func, const Expr* expr) {
   switch (expr->type()) {
+    case ExprType::ArrayNew:
+      WriteDataTypeExpr<ArrayNewExpr>(expr, Opcode::ArrayNew,
+                                      "array.new type index");
+      break;
+    case ExprType::ArrayGet:
+      WriteDataTypeExpr<ArrayGetExpr>(expr, Opcode::ArrayGet,
+                                      "array.get type index");
+      break;
+    case ExprType::ArraySet:
+      WriteDataTypeExpr<ArraySetExpr>(expr, Opcode::ArraySet,
+                                      "array.set type index");
+      break;
+    case ExprType::ArrayLen:
+      WriteDataTypeExpr<ArrayLenExpr>(expr, Opcode::ArrayLen,
+                                      "array.len type index");
+      break;
     case ExprType::AtomicLoad:
       WriteLoadStoreExpr<AtomicLoadExpr>(func, expr, "memory offset");
       break;
@@ -714,6 +744,28 @@ void BinaryWriter::WriteExpr(const Func* func, const Expr* expr) {
     case ExprType::Store:
       WriteLoadStoreExpr<StoreExpr>(func, expr, "store offset");
       break;
+    case ExprType::StructGet: {
+      auto* get_expr = cast<StructGetExpr>(expr);
+      Index index = module_->GetTypeIndex(get_expr->struct_var);
+      WriteOpcode(stream_, Opcode::StructGet);
+      WriteU32Leb128(stream_, index, "struct.get type index");
+      WriteU32Leb128(stream_, get_expr->field_var.index(),
+                     "struct.get field index");
+      break;
+    }
+    case ExprType::StructNew:
+      WriteDataTypeExpr<StructNewExpr>(expr, Opcode::StructNew,
+                                      "struct.new type index");
+      break;
+    case ExprType::StructSet: {
+      auto* set_expr = cast<StructSetExpr>(expr);
+      Index index = module_->GetTypeIndex(set_expr->struct_var);
+      WriteOpcode(stream_, Opcode::StructSet);
+      WriteU32Leb128(stream_, index, "struct.set type index");
+      WriteU32Leb128(stream_, set_expr->field_var.index(),
+                     "struct.set field index");
+      break;
+    }
     case ExprType::Throw:
       WriteOpcode(stream_, Opcode::Throw);
       WriteU32Leb128(stream_, GetEventVarDepth(&cast<ThrowExpr>(expr)->var),

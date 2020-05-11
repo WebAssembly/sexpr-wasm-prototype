@@ -41,8 +41,9 @@ const char* GetName(ExternKind kind) {
 
 const char* GetName(ObjectKind kind) {
   static const char* kNames[] = {
-      "Null",   "Foreign", "Trap",  "DefinedFunc", "HostFunc", "Table",
-      "Memory", "Global",  "Event", "Module",      "Instance", "Thread",
+      "Null",     "Foreign", "Trap",   "DefinedFunc", "HostFunc",
+      "Table",    "Memory",  "Global", "Event",       "Module",
+      "Instance", "Thread",  "Struct", "Array",
   };
   return kNames[int(kind)];
 }
@@ -50,6 +51,57 @@ const char* GetName(ObjectKind kind) {
 //// Refs ////
 // static
 const Ref Ref::Null{0};
+
+//// FuncTypeEntry ////
+std::unique_ptr<TypeEntry> FuncTypeEntry::Clone() const {
+  return MakeUnique<FuncTypeEntry>(*this);
+}
+
+Result Match(const FuncTypeEntry& expected,
+             const FuncTypeEntry& actual,
+             std::string* out_msg) {
+  if (expected.params != actual.params || expected.results != actual.results) {
+    if (out_msg) {
+      *out_msg = "import signature mismatch";
+    }
+    return Result::Error;
+  }
+  return Result::Ok;
+}
+
+//// StructTypeEntry ////
+std::unique_ptr<TypeEntry> StructTypeEntry::Clone() const {
+  return MakeUnique<StructTypeEntry>(*this);
+}
+
+Result Match(const StructTypeEntry& expected,
+             const StructTypeEntry& actual,
+             std::string* out_msg) {
+  if (expected.types != actual.types || expected.muts != actual.muts) {
+    if (out_msg) {
+      *out_msg = "struct type mismatch";
+    }
+    return Result::Error;
+  }
+  return Result::Ok;
+}
+
+//// ArrayTypeEntry ////
+std::unique_ptr<TypeEntry> ArrayTypeEntry::Clone() const {
+  return MakeUnique<ArrayTypeEntry>(*this);
+}
+
+Result Match(const ArrayTypeEntry& expected,
+             const ArrayTypeEntry& actual,
+             std::string* out_msg) {
+  if (expected.type != actual.type || expected.mut != actual.mut) {
+    if (out_msg) {
+      *out_msg = "array type mismatch";
+    }
+    return Result::Error;
+  }
+  return Result::Ok;
+}
 
 //// Limits ////
 Result Match(const Limits& expected,
@@ -87,13 +139,7 @@ std::unique_ptr<ExternType> FuncType::Clone() const {
 Result Match(const FuncType& expected,
              const FuncType& actual,
              std::string* out_msg) {
-  if (expected.params != actual.params || expected.results != actual.results) {
-    if (out_msg) {
-      *out_msg = "import signature mismatch";
-    }
-    return Result::Error;
-  }
-  return Result::Ok;
+  return Match(expected.entry, actual.entry, out_msg);
 }
 
 //// TableType ////
@@ -180,10 +226,10 @@ bool CanGrow(const Limits& limits, u32 old_size, u32 delta, u32* new_size) {
 //// FuncDesc ////
 
 ValueType FuncDesc::GetLocalType(Index index) const {
-  if (index < type.params.size()) {
-    return type.params[index];
+  if (index < type.entry.params.size()) {
+    return type.entry.params[index];
   }
-  index -= type.params.size();
+  index -= type.entry.params.size();
 
   auto iter = std::lower_bound(
       locals.begin(), locals.end(), index + 1,
@@ -391,8 +437,8 @@ Result DefinedFunc::DoCall(Thread& thread,
                            const Values& params,
                            Values& results,
                            Trap::Ptr* out_trap) {
-  assert(params.size() == type_.params.size());
-  thread.PushValues(type_.params, params);
+  assert(params.size() == type_.entry.params.size());
+  thread.PushValues(type_.entry.params, params);
   RunResult result = thread.PushCall(*this, out_trap);
   if (result == RunResult::Trap) {
     return Result::Error;
@@ -401,7 +447,7 @@ Result DefinedFunc::DoCall(Thread& thread,
   if (result == RunResult::Trap) {
     return Result::Error;
   }
-  thread.PopValues(type_.results, &results);
+  thread.PopValues(type_.entry.results, &results);
   return Result::Ok;
 }
 
@@ -1098,14 +1144,15 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
     case O::CallIndirect:
     case O::ReturnCallIndirect: {
       Table::Ptr table{store_, inst_->tables()[instr.imm_u32x2.fst]};
-      auto&& func_type = mod_->desc().func_types[instr.imm_u32x2.snd];
+      auto&& func_type = *cast<FuncTypeEntry>(
+          mod_->desc().types[instr.imm_u32x2.snd].type.get());
       auto entry = Pop<u32>();
       TRAP_IF(entry >= table->elements().size(), "undefined table index");
       auto new_func_ref = table->elements()[entry];
       TRAP_IF(new_func_ref == Ref::Null, "uninitialized table element");
       Func::Ptr new_func{store_, new_func_ref};
       TRAP_IF(
-          Failed(Match(new_func->type(), func_type, nullptr)),
+          Failed(Match(new_func->type().entry, func_type, nullptr)),
           "indirect call signature mismatch");  // TODO: don't use "signature"
       if (instr.op == O::ReturnCallIndirect) {
         return DoReturnCall(new_func, out_trap);
@@ -1376,6 +1423,19 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
       values_.resize(values_.size() - drop);
       break;
     }
+
+    case O::StructNew:
+      return DoStructNew(
+          *cast<StructTypeEntry>(mod_->desc().types[instr.imm_u32].type.get()));
+    case O::StructGet: return DoStructGet(instr.imm_u32);
+    case O::StructSet: return DoStructSet(instr.imm_u32);
+
+    case O::ArrayNew:
+      return DoArrayNew(
+          *cast<ArrayTypeEntry>(mod_->desc().types[instr.imm_u32].type.get()));
+    case O::ArrayGet: return DoArrayGet(out_trap);
+    case O::ArraySet: return DoArraySet(out_trap);
+    case O::ArrayLen: return DoArrayLen();
 
     case O::I32TruncSatF32S: return DoUnop(IntTruncSat<s32, f32>);
     case O::I32TruncSatF32U: return DoUnop(IntTruncSat<u32, f32>);
@@ -1708,18 +1768,18 @@ RunResult Thread::DoCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
     auto& func_type = host_func->type();
 
     Values params;
-    PopValues(func_type.params, &params);
+    PopValues(func_type.entry.params, &params);
     if (PushCall(*host_func, out_trap) == RunResult::Trap) {
       return RunResult::Trap;
     }
 
-    Values results(func_type.results.size());
+    Values results(func_type.entry.results.size());
     if (Failed(host_func->Call(*this, params, results, out_trap))) {
       return RunResult::Trap;
     }
 
     PopCall();
-    PushValues(func_type.results, results);
+    PushValues(func_type.entry.results, results);
   } else {
     if (PushCall(*cast<DefinedFunc>(func.get()), out_trap) == RunResult::Trap) {
       return RunResult::Ok;
@@ -1812,6 +1872,62 @@ RunResult Thread::DoConvert(Trap::Ptr* out_trap) {
 template <typename R, typename T>
 RunResult Thread::DoReinterpret() {
   Push(Bitcast<R>(Pop<T>()));
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoStructNew(const StructTypeEntry& entry) {
+  Values values;
+  PopValues(entry.types, &values);
+  assert(values.size() == entry.types.size());
+  Push(Struct::New(store_, entry, values).ref());
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoStructGet(Index field) {
+  auto ref = Pop<Ref>();
+  Struct::Ptr struct_ = store_.UnsafeGet<Struct>(ref);
+  Push(struct_->UnsafeGet(field));
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoStructSet(Index field) {
+  auto value = Pop();
+  auto ref = Pop<Ref>();
+  Struct::Ptr struct_ = store_.UnsafeGet<Struct>(ref);
+  struct_->UnsafeSet(field, value);
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoArrayNew(const ArrayTypeEntry& entry) {
+  auto size = Pop<u32>();
+  auto value = Pop();
+  Push(Array::New(store_, entry, value, size).ref());
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoArrayGet(Trap::Ptr* out_trap) {
+  auto index = Pop<u32>();
+  auto ref = Pop<Ref>();
+  Array::Ptr array = store_.UnsafeGet<Array>(ref);
+  Value value;
+  TRAP_IF(Failed(array->Get(index, &value)), "invalid array access");
+  Push(value);
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoArraySet(Trap::Ptr* out_trap) {
+  auto value = Pop();
+  auto index = Pop<u32>();
+  auto ref = Pop<Ref>();
+  Array::Ptr array = store_.UnsafeGet<Array>(ref);
+  TRAP_IF(Failed(array->Set(index, value)), "invalid array access");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoArrayLen() {
+  auto ref = Pop<Ref>();
+  Array::Ptr array = store_.UnsafeGet<Array>(ref);
+  Push<u32>(array->Len());
   return RunResult::Ok;
 }
 
@@ -2208,6 +2324,7 @@ std::string Thread::TraceSource::Pick(Index index, Instr instr) {
     case ValueType::Funcref: reftype = "funcref"; break;
     case ValueType::Exnref:  reftype = "exnref"; break;
     case ValueType::Anyref:  reftype = "anyref"; break;
+    case ValueType::RefT:    reftype = "ref $T"; break;  // TODO: type index
 
     default:
       WABT_UNREACHABLE;
@@ -2243,9 +2360,9 @@ ValueType Thread::TraceSource::GetLocalType(Index stack_slot) {
   // local1 can be accessed with stack_slot 4, and param1 can be accessed with
   // stack_slot 6. The formula below takes these values into account to convert
   // the stack_slot into a local index.
-  Index local_index =
-      (thread_->values_.size() - frame.values + func->type().params.size()) -
-      stack_slot;
+  Index local_index = (thread_->values_.size() - frame.values +
+                       func->type().entry.params.size()) -
+                      stack_slot;
   return func->desc().GetLocalType(local_index);
 }
 
@@ -2255,6 +2372,51 @@ ValueType Thread::TraceSource::GetGlobalType(Index index) {
 
 ValueType Thread::TraceSource::GetTableElementType(Index index) {
   return thread_->mod_->desc().tables[index].type.element;
+}
+
+//// Struct ////
+
+Struct::Struct(Store& store, const StructTypeEntry& type, const Values& values)
+    : Object(skind), type_(type), values_(values) {}
+
+void Struct::Mark(Store& store) {
+  for (size_t i = 0; i < type_.types.size(); ++i) {
+    if (type_.types[i].IsRef()) {
+      store.Mark(values_[i].Get<Ref>());
+    }
+  }
+}
+
+Result Struct::Set(Store& store, Index field, Ref ref) {
+  if (!(IsValidField(field) && store.HasValueType(ref, type_.types[field]))) {
+    return Result::Error;
+  }
+
+  values_[field].Set(ref);
+  return Result::Ok;
+}
+
+//// Array ////
+
+Array::Array(Store& store, const ArrayTypeEntry& type, Value value, Index size)
+    : Object(skind), type_(type), values_(size, value) {}
+
+void Array::Mark(Store& store) {
+  if (type_.type.IsRef()) {
+    for (auto&& value : values_) {
+      store.Mark(value.Get<Ref>());
+    }
+  }
+}
+
+Result Array::Set(Store& store, Index index, Ref ref) {
+  assert(type_.type.IsRef());
+  if (!(IsValidIndex(index) && store.HasValueType(ref, type_.type))) {
+    return Result::Error;
+  }
+
+  values_[index].Set(ref);
+  return Result::Ok;
 }
 
 }  // namespace interp

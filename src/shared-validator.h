@@ -108,6 +108,10 @@ class SharedValidator {
   Result EndFunctionBody(const Location&);
   Result OnLocalDecl(const Location&, Index count, Type type);
 
+  Result OnArrayGet(const Location&, Var type_var);
+  Result OnArrayLen(const Location&, Var type_var);
+  Result OnArrayNew(const Location&, Var type_var);
+  Result OnArraySet(const Location&, Var type_var);
   Result OnAtomicFence(const Location&, uint32_t consistency_model);
   Result OnAtomicLoad(const Location&, Opcode, Address align);
   Result OnAtomicNotify(const Location&, Opcode, Address align);
@@ -160,6 +164,9 @@ class SharedValidator {
   Result OnSimdLaneOp(const Location&, Opcode, uint64_t lane_idx);
   Result OnSimdShuffleOp(const Location&, Opcode, v128 lane_idx);
   Result OnStore(const Location&, Opcode, Address align);
+  Result OnStructGet(const Location&, Var type_var, Var field_var);
+  Result OnStructNew(const Location&, Var type_var);
+  Result OnStructSet(const Location&, Var type_var, Var field_var);
   Result OnTableCopy(const Location&, Var dst_var, Var src_var);
   Result OnTableFill(const Location&, Var table_var);
   Result OnTableGet(const Location&, Var table_var);
@@ -183,11 +190,15 @@ class SharedValidator {
     TypeVector results;
   };
 
+  using MutVector = std::vector<bool>;
+
   struct StructType {
     StructType() = default;
-    StructType(const TypeMutVector& fields) : fields(fields) {}
+    StructType(const TypeVector& types, const MutVector& muts)
+        : types(types), muts(muts) {}
 
-    TypeMutVector fields;
+    TypeVector types;
+    MutVector muts;
   };
 
   struct ArrayType {
@@ -255,7 +266,18 @@ class SharedValidator {
                              const std::vector<T>& values,
                              T* out,
                              const char* desc);
+  template <typename T>
+  Result CheckTypeIndex(Var var,
+                        const std::map<Index, T>& map,
+                        T* out,
+                        const char* desc1,
+                        const char* desc2);
   Result CheckFuncTypeIndex(Var sig_var, FuncType* out = nullptr);
+  Result CheckStructTypeIndex(Var struct_var, StructType* out = nullptr);
+  Result CheckArrayTypeIndex(Var array_var, ArrayType* out = nullptr);
+  Result CheckStructFieldIndex(const StructType& type,
+                               Var field_var,
+                               TypeMut* out = nullptr);
   Result CheckFuncIndex(Var func_var, FuncType* out = nullptr);
   Result CheckTableIndex(Var table_var, TableType* out = nullptr);
   Result CheckMemoryIndex(Var memory_var, MemoryType* out = nullptr);

@@ -30,7 +30,13 @@ std::string TypesToString(const TypeVector& types,
   }
 
   for (size_t i = 0; i < types.size(); ++i) {
-    result += types[i].GetName();
+    auto&& type = types[i];
+    if (type.IsRefT()) {
+      // TODO: Use more than type index (type name, struct/array, fields, etc.)
+      result += "ref " + std::to_string(type.GetRefTIndex());
+    } else {
+      result += types[i].GetName();
+    }
     if (i < types.size() - 1) {
       result += ", ";
     }
@@ -166,6 +172,12 @@ Result TypeChecker::CheckTypeStackEnd(const char* desc) {
 }
 
 static bool IsSubtype(Type sub, Type super) {
+  if (sub.IsRefT() && super.IsRefT()) {
+    // For now just check that they have the same type index.
+    // TODO: Handle various subtyping.
+    return sub.GetRefTIndex() == super.GetRefTIndex();
+  }
+
   if (super == sub) {
     return true;
   }
@@ -753,6 +765,44 @@ Result TypeChecker::OnSelect(Type expected) {
 
 Result TypeChecker::OnStore(Opcode opcode) {
   return CheckOpcode2(opcode);
+}
+
+Result TypeChecker::OnStructGet(Type struct_type, Type field_type) {
+  Result result = PopAndCheck1Type(struct_type, "struct.get");
+  PushType(field_type);
+  return result;
+}
+
+Result TypeChecker::OnStructNew(Type struct_type, const TypeVector& fields) {
+  Result result = PopAndCheckSignature(fields, "struct.new");
+  PushType(struct_type);
+  return result;
+}
+
+Result TypeChecker::OnStructSet(Type struct_type, Type field_type) {
+  return PopAndCheck2Types(struct_type, field_type, "struct.set");
+}
+
+Result TypeChecker::OnArrayGet(Type array_type, Type field_type) {
+  Result result = PopAndCheck2Types(array_type, Type::I32, "array.get");
+  PushType(field_type);
+  return result;
+}
+
+Result TypeChecker::OnArrayLen(Type array_type) {
+  Result result = PopAndCheck1Type(array_type, "array.len");
+  PushType(Type::I32);
+  return result;
+}
+
+Result TypeChecker::OnArrayNew(Type array_type, Type field_type) {
+  Result result = PopAndCheck2Types(field_type, Type::I32, "array.new");
+  PushType(array_type);
+  return result;
+}
+
+Result TypeChecker::OnArraySet(Type array_type, Type field_type) {
+  return PopAndCheck3Types(array_type, Type::I32, field_type, "array.set");
 }
 
 Result TypeChecker::OnTry(const TypeVector& param_types,

@@ -140,6 +140,10 @@ class BinaryReaderLogging : public BinaryReaderDelegate {
   Result OnOpcodeF64(uint64_t value) override;
   Result OnOpcodeV128(v128 value) override;
   Result OnOpcodeBlockSig(Type sig_type) override;
+  Result OnArrayNew(Index type_index) override;
+  Result OnArrayGet(Index type_index) override;
+  Result OnArraySet(Index type_index) override;
+  Result OnArrayLen(Index type_index) override;
   Result OnAtomicLoadExpr(Opcode opcode,
                           uint32_t alignment_log2,
                           Address offset) override;
@@ -190,6 +194,9 @@ class BinaryReaderLogging : public BinaryReaderDelegate {
   Result OnMemoryGrowExpr() override;
   Result OnMemoryInitExpr(Index segment_index) override;
   Result OnMemorySizeExpr() override;
+  Result OnStructNew(Index type_index) override;
+  Result OnStructGet(Index type_index, Index field_index) override;
+  Result OnStructSet(Index type_index, Index field_index) override;
   Result OnTableCopyExpr(Index dst_index, Index src_index) override;
   Result OnElemDropExpr(Index segment_index) override;
   Result OnTableInitExpr(Index segment_index, Index table_index) override;

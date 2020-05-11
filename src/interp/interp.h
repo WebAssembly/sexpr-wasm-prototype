@@ -73,6 +73,9 @@ enum class Mutability { Const, Var };
 enum class EventAttr { Exception };
 using SegmentMode = SegmentKind;
 enum class ElemKind { RefNull, RefFunc };
+enum class TypeEntryKind { Func, Struct, Array };
+
+using Mutabilities = std::vector<Mutability>;
 
 enum class ObjectKind {
   Null,
@@ -87,12 +90,15 @@ enum class ObjectKind {
   Module,
   Instance,
   Thread,
+  Struct,
+  Array,
 };
 
 const char* GetName(Mutability);
 const char* GetName(ValueType);
 const char* GetName(ExternKind);
 const char* GetName(ObjectKind);
+const char* GetName(TypeEntryKind);
 
 enum class InitExprKind {
   None,
@@ -164,6 +170,63 @@ Result Match(const Limits& expected,
              const Limits& actual,
              std::string* out_msg);
 
+struct TypeEntry {
+  explicit TypeEntry(TypeEntryKind);
+  virtual ~TypeEntry() {}
+
+  virtual std::unique_ptr<TypeEntry> Clone() const = 0;
+
+  TypeEntryKind kind;
+};
+
+struct FuncTypeEntry : TypeEntry {
+  static const TypeEntryKind skind = TypeEntryKind::Func;
+  static bool classof(const TypeEntry* entry);
+
+  explicit FuncTypeEntry(ValueTypes params, ValueTypes results);
+
+  std::unique_ptr<TypeEntry> Clone() const override;
+
+  friend Result Match(const FuncTypeEntry& expected,
+                      const FuncTypeEntry& actual,
+                      std::string* out_msg);
+
+  ValueTypes params;
+  ValueTypes results;
+};
+
+struct StructTypeEntry : TypeEntry {
+  static const TypeEntryKind skind = TypeEntryKind::Struct;
+  static bool classof(const TypeEntry* entry);
+
+  explicit StructTypeEntry(ValueTypes types, Mutabilities muts);
+
+  std::unique_ptr<TypeEntry> Clone() const override;
+
+  friend Result Match(const StructTypeEntry& expected,
+                      const StructTypeEntry& actual,
+                      std::string* out_msg);
+
+  ValueTypes types;
+  Mutabilities muts;
+};
+
+struct ArrayTypeEntry : TypeEntry {
+  static const TypeEntryKind skind = TypeEntryKind::Array;
+  static bool classof(const TypeEntry* entry);
+
+  explicit ArrayTypeEntry(ValueType type, Mutability mut);
+
+  std::unique_ptr<TypeEntry> Clone() const override;
+
+  friend Result Match(const ArrayTypeEntry& expected,
+                      const ArrayTypeEntry& actual,
+                      std::string* out_msg);
+
+  ValueType type;
+  Mutability mut;
+};
+
 struct ExternType {
   explicit ExternType(ExternKind);
   virtual ~ExternType() {}
@@ -177,6 +240,7 @@ struct FuncType : ExternType {
   static bool classof(const ExternType* type);
 
   explicit FuncType(ValueTypes params, ValueTypes results);
+  explicit FuncType(const FuncTypeEntry& entry);
 
   std::unique_ptr<ExternType> Clone() const override;
 
@@ -184,8 +248,7 @@ struct FuncType : ExternType {
                       const FuncType& actual,
                       std::string* out_msg);
 
-  ValueTypes params;
-  ValueTypes results;
+  FuncTypeEntry entry;
 };
 
 struct TableType : ExternType {
@@ -274,6 +337,14 @@ struct ExportType {
 
 //// Structure ////
 
+struct TypeDesc {
+  explicit TypeDesc(std::unique_ptr<TypeEntry>);
+  TypeDesc(const TypeDesc&);
+  TypeDesc& operator=(const TypeDesc&);
+
+  std::unique_ptr<TypeEntry> type;
+};
+
 struct ImportDesc {
   ImportType type;
 };
@@ -347,7 +418,7 @@ struct ElemDesc {
 };
 
 struct ModuleDesc {
-  std::vector<FuncType> func_types;
+  std::vector<TypeDesc> types;
   std::vector<ImportDesc> imports;
   std::vector<FuncDesc> funcs;
   std::vector<TableDesc> tables;
@@ -1079,6 +1150,15 @@ class Thread : public Object {
   template <typename T, typename V = T>
   RunResult DoStore(Instr, Trap::Ptr* out_trap);
 
+  RunResult DoStructNew(const StructTypeEntry&);
+  RunResult DoStructGet(Index field);
+  RunResult DoStructSet(Index field);
+
+  RunResult DoArrayNew(const ArrayTypeEntry&);
+  RunResult DoArrayGet(Trap::Ptr* out_trap);
+  RunResult DoArraySet(Trap::Ptr* out_trap);
+  RunResult DoArrayLen();
+
   RunResult DoMemoryInit(Instr, Trap::Ptr* out_trap);
   RunResult DoDataDrop(Instr);
   RunResult DoMemoryCopy(Instr, Trap::Ptr* out_trap);
@@ -1157,6 +1237,85 @@ struct Thread::TraceSource : Istream::TraceSource {
   ValueType GetTableElementType(Index);
 
   Thread* thread_;
+};
+
+class Struct : public Object {
+ public:
+  static bool classof(const Object* obj);
+  static const ObjectKind skind = ObjectKind::Struct;
+  static const char* GetTypeName() { return "Struct"; }
+  using Ptr = RefPtr<Struct>;
+
+  static Struct::Ptr New(Store&, const StructTypeEntry&, const Values&);
+
+  template <typename T>
+  Result Get(Index field, T* out) const;
+  template <typename T>
+  Result WABT_VECTORCALL Set(Index field, T);
+  Result Set(Store&, Index field, Ref);
+
+  Value UnsafeGet(Index field) const;
+  template <typename T>
+  T WABT_VECTORCALL UnsafeGet(Index field) const;
+  void UnsafeSet(Index field, Value);
+
+  const StructTypeEntry& type() const;
+
+ protected:
+  friend Store;
+  explicit Struct(Store&, const StructTypeEntry&, const Values&);
+  void Mark(Store&) override;
+
+  bool IsValidField(Index) const;
+
+
+  // TODO: Store the struct's type here for now. In the future, we may want
+  // these to be shared, in which case there should be a StructType Object as
+  // well.
+  StructTypeEntry type_;
+  // TODO: Pack values into a single memory allocation.
+  Values values_;
+};
+
+class Array : public Object {
+ public:
+  static bool classof(const Object* obj);
+  static const ObjectKind skind = ObjectKind::Array;
+  static const char* GetTypeName() { return "Array"; }
+  using Ptr = RefPtr<Array>;
+
+  static Array::Ptr New(Store&, const ArrayTypeEntry&, Value, Index size);
+
+  Index Len() const;
+
+  Result Get(Index, Value* out) const;
+  template <typename T>
+  Result Get(Index, T* out) const;
+  Result Set(Index, Value);
+  template <typename T>
+  Result WABT_VECTORCALL Set(Index, T);
+  Result Set(Store&, Index, Ref);
+
+  Value UnsafeGet(Index) const;
+  template <typename T>
+  T WABT_VECTORCALL UnsafeGet(Index) const;
+  // Unsafe because it doesn't check that the type matches. It does check the
+  // index though.
+  Result UnsafeSet(Index, Value);
+
+  const ArrayTypeEntry& type() const;
+
+ protected:
+  friend Store;
+  explicit Array(Store&, const ArrayTypeEntry&, Value, Index size);
+  void Mark(Store&) override;
+
+  bool IsValidIndex(Index) const;
+
+  // TODO: See comments in StructTypeEntry; we may want to share the type_
+  // between multiple arrays.
+  ArrayTypeEntry type_;
+  Values values_;
 };
 
 }  // namespace interp

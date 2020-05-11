@@ -122,8 +122,8 @@ class WatWriter : ModuleContext {
   void WriteQuotedString(string_view str, NextChar next_char);
   void WriteVar(const Var& var, NextChar next_char);
   void WriteBrVar(const Var& var, NextChar next_char);
-  void WriteType(Type type, NextChar next_char);
-  void WriteTypes(const TypeVector& types, const char* name);
+  void WriteType(TypeVar type, NextChar next_char);
+  void WriteTypes(const TypeVarVector& types, const char* name);
   void WriteFuncSigSpace(const FuncSignature& func_sig);
   void WriteBeginBlock(LabelType label_type,
                        const Block& block,
@@ -377,13 +377,19 @@ void WatWriter::WriteBrVar(const Var& var, NextChar next_char) {
   }
 }
 
-void WatWriter::WriteType(Type type, NextChar next_char) {
-  const char* type_name = type.GetName();
-  assert(type_name);
-  WritePuts(type_name, next_char);
+void WatWriter::WriteType(TypeVar type, NextChar next_char) {
+  if (type.type.IsRefT()) {
+    WriteOpenSpace("ref");
+    WriteVar(type.var, NextChar::Space);
+    WriteCloseSpace();
+  } else {
+    const char* type_name = type.type.GetName();
+    assert(type_name);
+    WritePuts(type_name, next_char);
+  }
 }
 
-void WatWriter::WriteTypes(const TypeVector& types, const char* name) {
+void WatWriter::WriteTypes(const TypeVarVector& types, const char* name) {
   if (types.size()) {
     if (name) {
       WriteOpenSpace(name);
@@ -492,6 +498,10 @@ class WatWriter::ExprVisitorDelegate : public ExprVisitor::Delegate {
  public:
   explicit ExprVisitorDelegate(WatWriter* writer) : writer_(writer) {}
 
+  Result OnArrayGetExpr(ArrayGetExpr*) override;
+  Result OnArrayLenExpr(ArrayLenExpr*) override;
+  Result OnArrayNewExpr(ArrayNewExpr*) override;
+  Result OnArraySetExpr(ArraySetExpr*) override;
   Result OnBinaryExpr(BinaryExpr*) override;
   Result BeginBlockExpr(BlockExpr*) override;
   Result EndBlockExpr(BlockExpr*) override;
@@ -538,6 +548,9 @@ class WatWriter::ExprVisitorDelegate : public ExprVisitor::Delegate {
   Result OnReturnCallExpr(ReturnCallExpr*) override;
   Result OnReturnCallIndirectExpr(ReturnCallIndirectExpr*) override;
   Result OnSelectExpr(SelectExpr*) override;
+  Result OnStructGetExpr(StructGetExpr*) override;
+  Result OnStructNewExpr(StructNewExpr*) override;
+  Result OnStructSetExpr(StructSetExpr*) override;
   Result OnStoreExpr(StoreExpr*) override;
   Result OnUnaryExpr(UnaryExpr*) override;
   Result OnUnreachableExpr(UnreachableExpr*) override;
@@ -836,6 +849,50 @@ Result WatWriter::ExprVisitorDelegate::OnSelectExpr(SelectExpr* expr) {
   return Result::Ok;
 }
 
+Result WatWriter::ExprVisitorDelegate::OnStructGetExpr(StructGetExpr* expr) {
+  writer_->WritePutsSpace(Opcode::StructGet_Opcode.GetName());
+  writer_->WriteVar(expr->struct_var, NextChar::Newline);
+  writer_->WriteVar(expr->field_var, NextChar::Newline);
+  return Result::Ok;
+}
+
+Result WatWriter::ExprVisitorDelegate::OnStructNewExpr(StructNewExpr* expr) {
+  writer_->WritePutsSpace(Opcode::StructNew_Opcode.GetName());
+  writer_->WriteVar(expr->var, NextChar::Newline);
+  return Result::Ok;
+}
+
+Result WatWriter::ExprVisitorDelegate::OnStructSetExpr(StructSetExpr* expr) {
+  writer_->WritePutsSpace(Opcode::StructSet_Opcode.GetName());
+  writer_->WriteVar(expr->struct_var, NextChar::Newline);
+  writer_->WriteVar(expr->field_var, NextChar::Newline);
+  return Result::Ok;
+}
+
+Result WatWriter::ExprVisitorDelegate::OnArrayGetExpr(ArrayGetExpr* expr) {
+  writer_->WritePutsSpace(Opcode::ArrayGet_Opcode.GetName());
+  writer_->WriteVar(expr->var, NextChar::Newline);
+  return Result::Ok;
+}
+
+Result WatWriter::ExprVisitorDelegate::OnArrayLenExpr(ArrayLenExpr* expr) {
+  writer_->WritePutsSpace(Opcode::ArrayLen_Opcode.GetName());
+  writer_->WriteVar(expr->var, NextChar::Newline);
+  return Result::Ok;
+}
+
+Result WatWriter::ExprVisitorDelegate::OnArrayNewExpr(ArrayNewExpr* expr) {
+  writer_->WritePutsSpace(Opcode::ArrayNew_Opcode.GetName());
+  writer_->WriteVar(expr->var, NextChar::Newline);
+  return Result::Ok;
+}
+
+Result WatWriter::ExprVisitorDelegate::OnArraySetExpr(ArraySetExpr* expr) {
+  writer_->WritePutsSpace(Opcode::ArraySet_Opcode.GetName());
+  writer_->WriteVar(expr->var, NextChar::Newline);
+  return Result::Ok;
+}
+
 Result WatWriter::ExprVisitorDelegate::OnStoreExpr(StoreExpr* expr) {
   writer_->WriteLoadStoreExpr<StoreExpr>(expr);
   return Result::Ok;
@@ -1127,7 +1184,7 @@ void WatWriter::WriteTypeBindings(const char* prefix,
    */
   bool is_open = false;
   size_t index = 0;
-  for (Type type : types) {
+  for (TypeVar type : types) {
     if (!is_open) {
       WriteOpenSpace(prefix);
       is_open = true;
