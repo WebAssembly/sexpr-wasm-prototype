@@ -1195,13 +1195,36 @@ Result WastParser::ParseElemModuleField(Module* module) {
 Result WastParser::ParseEventModuleField(Module* module) {
   WABT_TRACE(ParseEventModuleField);
   EXPECT(Lpar);
-  auto field = MakeUnique<EventModuleField>(GetLocation());
+  Location loc = GetLocation();
   EXPECT(Event);
-  ParseBindVarOpt(&field->event.name);
-  CHECK_RESULT(ParseTypeUseOpt(&field->event.decl));
-  CHECK_RESULT(ParseUnboundFuncSignature(&field->event.decl.sig));
+
+  std::string name;
+  ParseBindVarOpt(&name);
+
+  ModuleFieldList export_fields;
+  CHECK_RESULT(ParseInlineExports(&export_fields, ExternalKind::Event));
+
+  if (PeekMatchLpar(TokenType::Import)) {
+    CheckImportOrdering(module);
+    auto import = MakeUnique<EventImport>(name);
+    Event& event = import->event;
+    CHECK_RESULT(ParseInlineImport(import.get()));
+    CHECK_RESULT(ParseTypeUseOpt(&event.decl));
+    CHECK_RESULT(ParseUnboundFuncSignature(&event.decl.sig));
+    CHECK_RESULT(ErrorIfLpar({"type", "param", "result"}));
+    auto field =
+        MakeUnique<ImportModuleField>(std::move(import), GetLocation());
+    module->AppendField(std::move(field));
+  } else {
+    auto field = MakeUnique<EventModuleField>(loc, name);
+    CHECK_RESULT(ParseTypeUseOpt(&field->event.decl));
+    CHECK_RESULT(ParseUnboundFuncSignature(&field->event.decl.sig));
+    module->AppendField(std::move(field));
+  }
+
+  AppendInlineExportFields(module, &export_fields, module->events.size() - 1);
+
   EXPECT(Rpar);
-  module->AppendField(std::move(field));
   return Result::Ok;
 }
 
