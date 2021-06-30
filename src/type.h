@@ -49,7 +49,7 @@ class Type {
     Void = -0x40,       // 0x40
     ___ = Void,         // Convenient for the opcode table in opcode.h
 
-    Any = 0,          // Not actually specified, but useful for type-checking
+    Any = 0,   // Not actually specified, but useful for type-checking
     I8U = 4,   // Not actually specified, but used internally with load/store
     I16U = 6,  // Not actually specified, but used internally with load/store
     I32U = 7,  // Not actually specified, but used internally with load/store
@@ -108,7 +108,7 @@ class Type {
   //   (type $T (func (result i32 i64)))
   //   ...
   //   (block (type $T) ...)
-  // 
+  //
   bool IsIndex() const { return static_cast<int32_t>(enum_) >= 0; }
 
   Index GetIndex() const {

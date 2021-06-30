@@ -911,15 +911,16 @@ Result BinaryReaderInterp::OnSimdLoadLaneExpr(Opcode opcode,
                                               Address alignment_log2,
                                               Address offset,
                                               uint64_t value) {
-  CHECK_RESULT(validator_.OnSimdLoadLane(loc, opcode, GetAlignment(alignment_log2), value));
+  CHECK_RESULT(validator_.OnSimdLoadLane(loc, opcode,
+                                         GetAlignment(alignment_log2), value));
   istream_.Emit(opcode, kMemoryIndex0, offset, static_cast<u8>(value));
   return Result::Ok;
 }
 
 Result BinaryReaderInterp::OnSimdStoreLaneExpr(Opcode opcode,
-                                              Address alignment_log2,
-                                              Address offset,
-                                              uint64_t value) {
+                                               Address alignment_log2,
+                                               Address offset,
+                                               uint64_t value) {
   CHECK_RESULT(validator_.OnSimdStoreLane(loc, opcode,
                                           GetAlignment(alignment_log2), value));
   istream_.Emit(opcode, kMemoryIndex0, offset, static_cast<u8>(value));

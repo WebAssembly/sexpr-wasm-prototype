@@ -143,8 +143,9 @@ Result TypeChecker::CheckLabelType(Label* label, LabelType label_type) {
 Result TypeChecker::Check2LabelTypes(Label* label,
                                      LabelType label_type1,
                                      LabelType label_type2) {
-  return label->label_type == label_type1 ||
-         label->label_type == label_type2 ? Result::Ok : Result::Error;
+  return label->label_type == label_type1 || label->label_type == label_type2
+             ? Result::Ok
+             : Result::Error;
 }
 
 Result TypeChecker::GetThisFunctionLabel(Label** label) {
@@ -861,7 +862,9 @@ Result TypeChecker::OnSimdLaneOp(Opcode opcode, uint64_t lane_idx) {
   return result;
 }
 
-Result TypeChecker::OnSimdLoadLane(Opcode opcode, const Limits& limits, uint64_t lane_idx) {
+Result TypeChecker::OnSimdLoadLane(Opcode opcode,
+                                   const Limits& limits,
+                                   uint64_t lane_idx) {
   Result result = Result::Ok;
   uint32_t lane_count = opcode.GetSimdLaneCount();
   if (lane_idx >= lane_count) {
@@ -873,7 +876,9 @@ Result TypeChecker::OnSimdLoadLane(Opcode opcode, const Limits& limits, uint64_t
   return result;
 }
 
-Result TypeChecker::OnSimdStoreLane(Opcode opcode, const Limits& limits, uint64_t lane_idx) {
+Result TypeChecker::OnSimdStoreLane(Opcode opcode,
+                                    const Limits& limits,
+                                    uint64_t lane_idx) {
   Result result = Result::Ok;
   uint32_t lane_count = opcode.GetSimdLaneCount();
   if (lane_idx >= lane_count) {

@@ -255,7 +255,7 @@ RefPtr<T>::RefPtr(const RefPtr<U>& other)
 
 template <typename T>
 template <typename U>
-RefPtr<T>& RefPtr<T>::operator=(const RefPtr<U>& other){
+RefPtr<T>& RefPtr<T>::operator=(const RefPtr<U>& other) {
   obj_ = other.obj_;
   store_ = other.store_;
   root_index_ = store_ ? store_->CopyRoot(other.root_index_) : 0;
@@ -360,7 +360,8 @@ template <> inline bool HasType<f32>(ValueType type) { return type == ValueType:
 template <> inline bool HasType<f64>(ValueType type) { return type == ValueType::F64; }
 template <> inline bool HasType<Ref>(ValueType type) { return IsReference(type); }
 
-template <typename T> void RequireType(ValueType type) {
+template <typename T>
+void RequireType(ValueType type) {
   assert(HasType<T>(type));
 }
 
@@ -634,10 +635,8 @@ inline Memory::Ptr Memory::New(interp::Store& store, MemoryType type) {
 
 inline bool Memory::IsValidAccess(u64 offset, u64 addend, u64 size) const {
   // FIXME: make this faster.
-  return offset <= data_.size() &&
-         addend <= data_.size() &&
-         size <= data_.size() &&
-         offset + addend + size <= data_.size();
+  return offset <= data_.size() && addend <= data_.size() &&
+         size <= data_.size() && offset + addend + size <= data_.size();
 }
 
 inline bool Memory::IsValidAtomicAccess(u64 offset,
@@ -652,7 +651,8 @@ Result Memory::Load(u64 offset, u64 addend, T* out) const {
   if (!IsValidAccess(offset, addend, sizeof(T))) {
     return Result::Error;
   }
-  wabt::MemcpyEndianAware(out, data_.data(), sizeof(T), data_.size(), 0, offset + addend, sizeof(T));
+  wabt::MemcpyEndianAware(out, data_.data(), sizeof(T), data_.size(), 0,
+                          offset + addend, sizeof(T));
   return Result::Ok;
 }
 
@@ -660,7 +660,8 @@ template <typename T>
 T WABT_VECTORCALL Memory::UnsafeLoad(u64 offset, u64 addend) const {
   assert(IsValidAccess(offset, addend, sizeof(T)));
   T val;
-  wabt::MemcpyEndianAware(&val, data_.data(), sizeof(T), data_.size(), 0, offset + addend, sizeof(T));
+  wabt::MemcpyEndianAware(&val, data_.data(), sizeof(T), data_.size(), 0,
+                          offset + addend, sizeof(T));
   return val;
 }
 
@@ -669,7 +670,8 @@ Result WABT_VECTORCALL Memory::Store(u64 offset, u64 addend, T val) {
   if (!IsValidAccess(offset, addend, sizeof(T))) {
     return Result::Error;
   }
-  wabt::MemcpyEndianAware(data_.data(), &val, data_.size(), sizeof(T), offset + addend, 0, sizeof(T));
+  wabt::MemcpyEndianAware(data_.data(), &val, data_.size(), sizeof(T),
+                          offset + addend, 0, sizeof(T));
   return Result::Ok;
 }
 
@@ -678,7 +680,8 @@ Result Memory::AtomicLoad(u64 offset, u64 addend, T* out) const {
   if (!IsValidAtomicAccess(offset, addend, sizeof(T))) {
     return Result::Error;
   }
-  wabt::MemcpyEndianAware(out, data_.data(), sizeof(T), data_.size(), 0, offset + addend, sizeof(T));
+  wabt::MemcpyEndianAware(out, data_.data(), sizeof(T), data_.size(), 0,
+                          offset + addend, sizeof(T));
   return Result::Ok;
 }
 
@@ -687,7 +690,8 @@ Result Memory::AtomicStore(u64 offset, u64 addend, T val) {
   if (!IsValidAtomicAccess(offset, addend, sizeof(T))) {
     return Result::Error;
   }
-  wabt::MemcpyEndianAware(data_.data(), &val, data_.size(), sizeof(T), offset + addend, 0, sizeof(T));
+  wabt::MemcpyEndianAware(data_.data(), &val, data_.size(), sizeof(T),
+                          offset + addend, 0, sizeof(T));
   return Result::Ok;
 }
 
