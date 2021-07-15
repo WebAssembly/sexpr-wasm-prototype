@@ -132,6 +132,7 @@ class BinaryReader {
   Result ReadRelocSection(Offset section_size) WABT_WARN_UNUSED;
   Result ReadDylinkSection(Offset section_size) WABT_WARN_UNUSED;
   Result ReadLinkingSection(Offset section_size) WABT_WARN_UNUSED;
+  Result ReadBranchHintsSection(Offset section_size) WABT_WARN_UNUSED;
   Result ReadCustomSection(Index section_index,
                            Offset section_size) WABT_WARN_UNUSED;
   Result ReadTypeSection(Offset section_size) WABT_WARN_UNUSED;
@@ -2137,6 +2138,62 @@ Result BinaryReader::ReadTagSection(Offset section_size) {
   return Result::Ok;
 }
 
+Result BinaryReader::ReadBranchHintsSection(Offset section_size) {
+  CALLBACK(BeginBranchHintsSection, section_size);
+
+  Index num_funcions;
+  CHECK_RESULT(ReadCount(&num_funcions, "function count"));
+  CALLBACK(OnBranchHintsFuncCount, num_funcions);
+
+  Index last_function_index = kInvalidIndex;
+  for (Index i = 0; i < num_funcions; ++i) {
+    Index function_index;
+    CHECK_RESULT(ReadCount(&function_index, "function index"));
+    ERROR_UNLESS(function_index >= num_func_imports_,
+                 "function import not allowed as hinted (got %" PRIindex ")",
+                 function_index);
+    ERROR_UNLESS(function_index < NumTotalFuncs(),
+                 "invalid function index: %" PRIindex, function_index);
+    ERROR_UNLESS(function_index != last_function_index,
+                 "duplicate function name: %" PRIindex, function_index);
+    ERROR_UNLESS(last_function_index == kInvalidIndex ||
+                     function_index > last_function_index,
+                 "function index out of order: %" PRIindex, function_index);
+    last_function_index = function_index;
+
+    uint8_t reserved;
+    CHECK_RESULT(ReadU8(&reserved, "reserved"));
+    ERROR_UNLESS(reserved == 0x0, "unexpected reserved 0 byte (got %u)", reserved);
+
+    Index num_hints;
+    CHECK_RESULT(ReadCount(&num_hints, "hint count"));
+
+    CALLBACK(OnBranchHintsCount, function_index, num_hints);
+
+    Offset last_code_offset = kInvalidOffset;
+    for (Index j = 0; j < num_hints; ++j) {
+      uint32_t kind;
+      CHECK_RESULT(ReadU32Leb128(&kind, "kind"));
+      ERROR_UNLESS(kind == 0x0 || kind == 0x1, "unexpected hint kind (got %u)", kind);
+      BranchHintKind branch_kind = static_cast<BranchHintKind>(kind);
+
+      Offset code_offset;
+      CHECK_RESULT(ReadOffset(&code_offset, "code offset"));
+      ERROR_UNLESS(code_offset != last_code_offset,
+                   "duplicate code offset: %" PRIzx, code_offset);
+      ERROR_UNLESS(last_code_offset == kInvalidOffset ||
+                       code_offset > last_code_offset,
+                   "code offset out of order: %" PRIzx, code_offset);
+      last_code_offset = code_offset;
+
+      CALLBACK(OnBranchHint, branch_kind, code_offset);
+    }
+  }
+
+  CALLBACK(EndBranchHintsSection);
+  return Result::Ok;
+}
+
 Result BinaryReader::ReadCustomSection(Index section_index,
                                        Offset section_size) {
   string_view section_name;
@@ -2155,6 +2212,8 @@ Result BinaryReader::ReadCustomSection(Index section_index,
     CHECK_RESULT(ReadRelocSection(section_size));
   } else if (section_name == WABT_BINARY_SECTION_LINKING) {
     CHECK_RESULT(ReadLinkingSection(section_size));
+  } else if (options_.features.branch_hinting_enabled() && section_name == WABT_BINARY_SECTION_BRANCH_HINTS) {
+    CHECK_RESULT(ReadBranchHintsSection(section_size));
   } else {
     // This is an unknown custom section, skip it.
     state_.offset = read_end_;
